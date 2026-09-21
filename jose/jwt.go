@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package jose
 
@@ -58,10 +40,10 @@ type SettableJwtClaims struct {
 	NotBefore  int64     `json:"nbf,omitempty"`
 }
 
-//UntypedClaims for non-standard clains
+// UntypedClaims for non-standard clains
 type UntypedClaims map[string]json.RawMessage
 
-//JwtClaims claims for a JWT
+// JwtClaims claims for a JWT
 type JwtClaims struct {
 	AutomaticJwtClaims
 	SettableJwtClaims
@@ -131,6 +113,13 @@ func (c *JwtClaims) UnmarshalCustomClaim(name string, claim interface{}) error {
 }
 
 // MarshalJSON implements json.Marshaler interface method.
+//
+// Claim names are merged into a map rather than into a dynamically built struct.
+// The struct approach (reflect.StructOf with a synthesised "A"+name field) panicked
+// on any claim name that is not a valid Go identifier suffix — which includes the
+// URL-namespaced names that OIDC mandates for custom claims, e.g.
+// "https://example.com/roles" — and on names colliding with the embedded field
+// names. A map has no such constraint and round-trips every name JSON permits.
 func (c *JwtClaims) MarshalJSON() (dst []byte, err error) {
 	// Temporary type and instance. Note the use of references.
 	output := struct {
@@ -141,51 +130,35 @@ func (c *JwtClaims) MarshalJSON() (dst []byte, err error) {
 		SettableJwtClaims:  &c.SettableJwtClaims,
 	}
 
-	// Dynamically generate a struct with typed and untyped fields for marshalling.
-
-	// Copy struct fields from our temporary type
-	fields := make([]reflect.StructField, 0, reflect.TypeOf(output).NumField())
-	for i := 0; i < reflect.TypeOf(output).NumField(); i++ {
-		fields = append(fields, reflect.TypeOf(output).Field(i))
+	// Marshal the typed claims first, then decompose them into the output map so the
+	// typed and untyped halves can be merged in a single object.
+	var typed []byte
+	if typed, err = json.Marshal(output); err != nil {
+		return nil, err
 	}
-	// Create struct fields for each untyped entry.
-	for k := range c.UntypedClaims {
+	merged := map[string]json.RawMessage{}
+	if err = json.Unmarshal(typed, &merged); err != nil {
+		return nil, err
+	}
+
+	for k, v := range c.UntypedClaims {
 		// Validate untyped fields do not clash with standard JWT claims.
 		if _, invalid := reservedJwtClaims[k]; invalid {
-			err = ErrJwkReservedClaimName
-			return
+			return nil, ErrJwkReservedClaimName
 		}
-		field := reflect.StructField{
-			Name:      fmt.Sprintf("A%s", k), // Add the "A" to make sure the field is exported.
-			Type:      reflect.TypeOf(json.RawMessage{}),
-			Tag:       reflect.StructTag(fmt.Sprintf("json:\"%s\"", k)), // Fix the field.
-			Index:     []int{len(fields)},
-			Anonymous: false,
-		}
-		fields = append(fields, field)
+		merged[k] = v
 	}
-	// Create instance of our new dynamic type.
-	typ := reflect.StructOf(fields)
-	inst := reflect.New(typ)
-	// Copy the values from our typed fields.
-	for i := 0; i < reflect.TypeOf(output).NumField(); i++ {
-		inst.Elem().FieldByName(reflect.TypeOf(output).Field(i).Name).Set(reflect.ValueOf(output).Field(i))
-	}
-	// Copy the values from our untyped fields.
-	for k, v := range c.UntypedClaims {
-		inst.Elem().FieldByName(fmt.Sprintf("A%s", k)).Set(reflect.ValueOf(v))
-	}
-	return json.Marshal(inst.Interface())
+	return json.Marshal(merged)
 }
 
-//Jwt defines a Jave web token
+// Jwt defines a Jave web token
 type Jwt struct {
 	Header    JwsHeader
 	Claims    JwtClaims
 	Signature []byte
 }
 
-//Verify JWT is valid or error
+// Verify JWT is valid or error
 func (jwt *Jwt) Verify() error {
 	if jwt.Header.Typ != JwtType {
 		/* Not a JWT. */
@@ -195,6 +168,13 @@ func (jwt *Jwt) Verify() error {
 		return ErrJwtFormat
 
 	}
+	// RFC 7515 §4.1.11: extension header parameters listed in "crit" must be understood
+	// and processed, otherwise the JWS is invalid. gose implements no extensions, so any
+	// non-empty "crit" is fatal. Enforced here rather than in the gose verifier so every
+	// path through the jose layer inherits it.
+	if len(jwt.Header.Crit) > 0 {
+		return ErrCritHeaderNotSupported
+	}
 	for k := range jwt.Claims.UntypedClaims {
 		if _, invalid := reservedJwtClaims[k]; invalid {
 			return ErrJwkReservedClaimName
@@ -203,7 +183,7 @@ func (jwt *Jwt) Verify() error {
 	return nil
 }
 
-//MarshalBody representation of the JWT Header and Claims.
+// MarshalBody representation of the JWT Header and Claims.
 func (jwt *Jwt) MarshalBody() (body string, err error) {
 	if err = jwt.Verify(); err != nil {
 		return
@@ -215,7 +195,7 @@ func (jwt *Jwt) MarshalBody() (body string, err error) {
 	return jws.MarshalBody()
 }
 
-//Unmarshal string to JWT body, or error
+// Unmarshal string to JWT body, or error
 func (jwt *Jwt) Unmarshal(src string) (body string, err error) {
 	/* Compact JWT encoding. */
 	/* Default Exp field to maximum in case it is not set. */

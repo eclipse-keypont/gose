@@ -1,13 +1,21 @@
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
+
 package gose
 
 import (
 	"bytes"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
-	"github.com/ThalesGroup/gose/jose"
+	"crypto/rsa"
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const (
@@ -51,6 +59,141 @@ func TestJweRsaKeyEncryptionDecryptorImpl_Decrypt_KAT(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "The true sign of intelligence is not knowledge but imagination.", string(pt))
 	assert.Len(t, aad, 46)
+}
+
+// The same spec vector must decrypt with no digest supplied: its "RSA-OAEP" header
+// mandates SHA-1 under RFC 7518 §4.3, so the decryptor can derive it unaided.
+func TestJweRsaKeyEncryptionDecryptorImpl_Decrypt_KAT_HashFromHeader(t *testing.T) {
+	decryptor := generateDecryptor(t)
+	pt, _, err := decryptor.Decrypt(oaepJweFromSpec, crypto.Hash(0))
+	require.NoError(t, err)
+	assert.Equal(t, "The true sign of intelligence is not knowledge but imagination.", string(pt))
+}
+
+// Round-trip both OAEP variants with the digest derived from the header, which is what a
+// conformant peer does.
+func TestJweRsaKeyOAEPEncryptionDecryption_HashFromHeader(t *testing.T) {
+	input := []byte("The true sign of intelligence is not knowledge but imagination.")
+
+	for name, tc := range map[string]struct {
+		hash        crypto.Hash
+		expectedAlg jose.Alg
+	}{
+		"sha1":   {crypto.SHA1, jose.AlgRSAOAEPSHA1},
+		"sha256": {crypto.SHA256, jose.AlgRSAOAEPSHA2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			encryptor, decryptor := generateOaepPair(t)
+			ct, err := encryptor.Encrypt(input, tc.hash)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.expectedAlg, decodeProtectedHeader(t, ct).Alg)
+
+			pt, _, err := decryptor.Decrypt(ct, crypto.Hash(0))
+			require.NoError(t, err)
+			assert.Equal(t, input, pt)
+		})
+	}
+}
+
+// gose used to label SHA-256 wrapping as "RSA-OAEP". Those JWEs are at rest in existing
+// deployments and must stay readable via the explicit-digest override, even though the
+// header alone would send a conformant decryptor to SHA-1.
+func TestJweRsaKeyEncryptionDecryptorImpl_Decrypt_LegacyMislabelledJwe(t *testing.T) {
+	input := []byte("secret written by a pre-fix gose")
+	_, decryptor := generateOaepPair(t)
+	legacyJwe := makeLegacyMislabelledJwe(t, input)
+
+	// Deriving the digest from the header picks SHA-1, which cannot unwrap this CEK.
+	_, _, err := decryptor.Decrypt(legacyJwe, crypto.Hash(0))
+	require.Error(t, err)
+
+	// The override reads it.
+	pt, _, err := decryptor.Decrypt(legacyJwe, crypto.SHA256)
+	require.NoError(t, err)
+	assert.Equal(t, input, pt)
+}
+
+// legacyDecryptionKey is generated once per process so that makeLegacyMislabelledJwe and
+// the decryptor returned by generateOaepPair share a key. Generating RSA keys is slow;
+// these tests do not run in parallel, so a plain package-level cache is safe.
+var legacyDecryptionKey AsymmetricDecryptionKey
+
+func generateOaepPair(t *testing.T) (*JweRsaKeyEncryptionEncryptorImpl, *JweRsaKeyEncryptionDecryptorImpl) {
+	t.Helper()
+	if legacyDecryptionKey == nil {
+		generator := &RsaKeyDecryptionKeyGenerator{}
+		key, err := generator.Generate(jose.AlgRSAOAEP, 2048, []jose.KeyOps{jose.KeyOpsDecrypt})
+		require.NoError(t, err)
+		legacyDecryptionKey = key
+	}
+	encryptionKey, err := legacyDecryptionKey.Encryptor()
+	require.NoError(t, err)
+	publicJwk, err := encryptionKey.Jwk()
+	require.NoError(t, err)
+	encryptor, err := NewJweRsaKeyEncryptionEncryptorImpl(publicJwk, rand.Reader)
+	require.NoError(t, err)
+	store, err := NewAsymmetricDecryptionKeyStoreImpl(
+		map[string]AsymmetricDecryptionKey{legacyDecryptionKey.Kid(): legacyDecryptionKey})
+	require.NoError(t, err)
+	return encryptor, NewJweRsaKeyEncryptionDecryptorImpl(store)
+}
+
+// makeLegacyMislabelledJwe reproduces gose's pre-fix output: the CEK wrapped with SHA-256
+// while the protected header advertises "RSA-OAEP". The header cannot simply be rewritten
+// after the fact because it is the AEAD's additional authenticated data.
+func makeLegacyMislabelledJwe(t *testing.T, plaintext []byte) string {
+	t.Helper()
+	encryptionKey, err := legacyDecryptionKey.Encryptor()
+	require.NoError(t, err)
+	publicJwk, err := encryptionKey.Jwk()
+	require.NoError(t, err)
+	pub, err := LoadPublicKey(publicJwk, validEncryptionOpts)
+	require.NoError(t, err)
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	require.True(t, ok)
+
+	cek := make([]byte, 32)
+	_, err = rand.Read(cek)
+	require.NoError(t, err)
+	iv := make([]byte, 12)
+	_, err = rand.Read(iv)
+	require.NoError(t, err)
+
+	// SHA-256 wrapping under an "RSA-OAEP" label: the defect being preserved for reading.
+	encryptedCEK, err := rsa.EncryptOAEP(crypto.SHA256.New(), rand.Reader, rsaPub, cek, nil)
+	require.NoError(t, err)
+
+	header := &jose.JweProtectedHeader{
+		JwsHeader: jose.JwsHeader{
+			Alg: jose.AlgRSAOAEP,
+			Kid: legacyDecryptionKey.Kid(),
+			Typ: "JWT",
+			Cty: "JWT",
+		},
+		Enc: jose.EncA256GCM,
+	}
+	aad, err := header.MarshalProtectedHeader()
+	require.NoError(t, err)
+
+	block, err := aes.NewCipher(cek)
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	cryptor, err := NewAesGcmCryptor(aead, rand.Reader, "", jose.AlgA256GCM, []jose.KeyOps{jose.KeyOpsEncrypt})
+	require.NoError(t, err)
+	ciphertext, tag, err := cryptor.Seal(jose.KeyOpsEncrypt, iv, plaintext, aad)
+	require.NoError(t, err)
+
+	jwe, err := (&jose.JweRfc7516Compact{
+		ProtectedHeader:      *header,
+		EncryptedKey:         encryptedCEK,
+		InitializationVector: iv,
+		Ciphertext:           ciphertext,
+		AuthenticationTag:    tag,
+	}).Marshal()
+	require.NoError(t, err)
+	return jwe
 }
 
 func TestJweRsaKeyOAEPEncryptionDecryption(t *testing.T) {

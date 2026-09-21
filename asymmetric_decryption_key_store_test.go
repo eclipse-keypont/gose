@@ -1,10 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
+
 package gose
 
 import (
-	"github.com/ThalesGroup/gose/jose"
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 func TestAsymmetricDecryptionKeyStoreImpl_Get(t *testing.T) {
@@ -25,9 +30,10 @@ func TestAsymmetricDecryptionKeyStoreImpl_Get(t *testing.T) {
 	assert.NotNil(t, second)
 	// Test that we never return a key if kids do not match and we have multiple keys in the store
 	store, err = NewAsymmetricDecryptionKeyStoreImpl(map[string]AsymmetricDecryptionKey{
-		"test": key,
+		"test":    key,
 		"another": key,
 	})
+	require.NoError(t, err)
 	third, err := store.Get("unknown")
 	assert.Error(t, err)
 	assert.Nil(t, third)

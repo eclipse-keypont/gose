@@ -1,11 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
+
 package gose
 
 import (
 	"encoding/base64"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -15,7 +19,7 @@ const (
 )
 
 const (
-	mockExpectedCleartext = "decrypted"
+	mockExpectedCleartext  = "decrypted"
 	mockExpectedCiphertext = "encrypted"
 )
 
@@ -31,7 +35,7 @@ func (mbm *MockBlockMode) BlockSize() int {
 
 // In order to simulate a behavior tangible for tests, i.e encrypt or decrypt according to the mode, we simply return a
 // string that inform us if we properly were in the encrypt or decrypt mode
-func (mbm *MockBlockMode) CryptBlocks(dst, src []byte) {
+func (mbm *MockBlockMode) CryptBlocks(dst, _ []byte) {
 	switch mbm.mode {
 	case ModeDecrypt:
 		copy(dst, mockExpectedCleartext)
@@ -46,7 +50,7 @@ func (mbm *MockBlockMode) CryptBlocks(dst, src []byte) {
 func VerifyJWEStructure(t *testing.T, jwe string) {
 	require.NotEmpty(t, jwe)
 	// verify the structure
-	splits := strings.Split(jwe,  ".")
+	splits := strings.Split(jwe, ".")
 	require.Equal(t, 5, len(splits))
 	// For direct encryption, the encrypted key is nil
 	// we expected an empty string for the second part of the JWE

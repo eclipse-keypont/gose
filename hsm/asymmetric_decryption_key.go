@@ -1,21 +1,30 @@
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
+
+// Package hsm provides asymmetric decryption keys backed by a Hardware Security Module.
 package hsm
 
 import (
 	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
-	"github.com/ThalesGroup/crypto11"
-	"github.com/ThalesGroup/gose"
-	"github.com/ThalesGroup/gose/jose"
+	"log/slog"
+
+	"github.com/eclipse-keypont/crypto11/v2"
+
+	"github.com/eclipse-keypont/gose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
-// AsymmetricDecryptionKey implements RSA OAEP using SHA1 decryption.
+// AsymmetricDecryptionKey implements RSAES-OAEP decryption. The digest is chosen per
+// operation by the hash passed to Decrypt, so the same key serves both the SHA-1
+// ("RSA-OAEP") and SHA-256 ("RSA-OAEP-256") variants, subject to what the token supports.
 // This structure is made to provide a management of pkcs11-handled asymmetric key pairs
 type AsymmetricDecryptionKey struct {
-	kid []byte
+	kid      []byte
 	keylabel []byte
-	ctx *crypto11.Context
-	key crypto11.SignerDecrypter
+	ctx      *crypto11.Context
+	key      crypto11.SignerDecrypter
 }
 
 // Kid the unique identifier of this key.
@@ -29,12 +38,15 @@ func (a *AsymmetricDecryptionKey) Certificates() []*x509.Certificate {
 	cert, err := a.ctx.FindCertificate(a.kid, a.keylabel, nil)
 	if err != nil {
 		// TODO: return an error via an interface signature change in next major version.
-		panic(err)
+		slog.Error("failed to find certificate for HSM key", "kid", string(a.kid), "err", err)
+		return nil
 	}
 	return []*x509.Certificate{cert}
 }
 
-// Algorithm return jose.AlgRSAOAEP the fixed algorithm that AsymmetricDecryptionKey implements.
+// Algorithm returns jose.AlgRSAOAEP, naming the RSAES-OAEP family this key implements.
+// The JWE protected header, not this value, determines which OAEP digest a given
+// ciphertext uses.
 func (a *AsymmetricDecryptionKey) Algorithm() jose.Alg {
 	return jose.AlgRSAOAEP
 }
@@ -46,8 +58,8 @@ func (a *AsymmetricDecryptionKey) Decrypt(_ jose.KeyOps, hash crypto.Hash, bytes
 		return nil, err
 	}
 
-	return a.key.Decrypt(randReader, bytes, &rsa.OAEPOptions {
-		Hash: hash,
+	return a.key.Decrypt(randReader, bytes, &rsa.OAEPOptions{
+		Hash:  hash,
 		Label: nil,
 	})
 }
@@ -68,9 +80,9 @@ var _ gose.AsymmetricDecryptionKey = (*AsymmetricDecryptionKey)(nil)
 // 'keyid' or 'keylabel' can be nil, but nut both. Provide at least one or both.
 func NewAsymmetricDecryptionKey(pkcs11Context *crypto11.Context, key crypto11.SignerDecrypter, kid []byte, keylabel []byte) (*AsymmetricDecryptionKey, error) {
 	return &AsymmetricDecryptionKey{
-		kid: kid,
+		kid:      kid,
 		keylabel: keylabel,
-		ctx: pkcs11Context,
-		key: key,
+		ctx:      pkcs11Context,
+		key:      key,
 	}, nil
 }

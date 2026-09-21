@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -31,9 +13,10 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/ThalesGroup/gose/jose"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 func TestGenerateKidRSA(t *testing.T) {
@@ -140,9 +123,9 @@ func TestAESKeySerializationAndDeserialization(t *testing.T) {
 	require.NoError(t, err)
 
 	var jwk16, jwk24, jwk32 jose.Jwk
-	jwk16, err = JwkFromSymmetric(key8, jose.AlgA128GCM)
+	_, err = JwkFromSymmetric(key8, jose.AlgA128GCM)
 	assert.Error(t, err, ErrInvalidKeyLength)
-	jwk16, err = JwkFromSymmetric(key24, jose.AlgA128GCM)
+	_, err = JwkFromSymmetric(key24, jose.AlgA128GCM)
 	assert.Error(t, err, ErrInvalidKeyLength)
 
 	jwk16, err = JwkFromSymmetric(key16, jose.AlgA128GCM)
@@ -377,8 +360,7 @@ func TestJwkToString(t *testing.T) {
 }
 
 func TestUintToBytesBigEndian(t *testing.T) {
-	var val1 uint64
-	val1 = 42
+	var val1 uint64 = 42
 	be1 := uintToBytesBigEndian(val1)
 	require.NotEmpty(t, be1)
 
@@ -388,7 +370,8 @@ func TestUintToBytesBigEndian(t *testing.T) {
 
 func TestGetALFromAAD(t *testing.T) {
 	aad := make([]byte, 51)
-	_, err := rand.Read(aad); if err != nil {
+	_, err := rand.Read(aad)
+	if err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,43 +1,25 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
 import (
-	"io/ioutil"
-
 	"bytes"
+	"context"
 	"encoding/json"
+	"os"
 	"sync"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
-//TrustKeyStoreImpl implements the Trust Store API
+// TrustKeyStoreImpl implements the Trust Store API
 type TrustKeyStoreImpl struct {
 	keys map[string]map[string]jose.Jwk
 	mtx  sync.Mutex
 }
 
-//Add add an issuer and JWK to the truststore
+// Add add an issuer and JWK to the truststore
 func (store *TrustKeyStoreImpl) Add(issuer string, jwk jose.Jwk) error {
 	if jwk.Kid() == "" {
 		// We want a Key ID and we want it now!
@@ -55,7 +37,7 @@ func (store *TrustKeyStoreImpl) Add(issuer string, jwk jose.Jwk) error {
 	return nil
 }
 
-//Remove remove JWK for issuer and jwk id
+// Remove remove JWK for issuer and jwk id
 func (store *TrustKeyStoreImpl) Remove(issuer, kid string) bool {
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
@@ -66,8 +48,8 @@ func (store *TrustKeyStoreImpl) Remove(issuer, kid string) bool {
 	return true
 }
 
-//Get get verification jwk for issuer and jwk id
-func (store *TrustKeyStoreImpl) Get(issuer, kid string) (vk VerificationKey, err error) {
+// Get get verification jwk for issuer and jwk id
+func (store *TrustKeyStoreImpl) Get(_ context.Context, issuer, kid string) (vk VerificationKey, err error) {
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
 	if keySet, ok := store.keys[issuer]; ok {
@@ -81,7 +63,7 @@ func (store *TrustKeyStoreImpl) Get(issuer, kid string) (vk VerificationKey, err
 	return nil, ErrUnknownKey
 }
 
-//NewTrustKeyStore loads truststore for map of jose.JWK
+// NewTrustKeyStore loads truststore for map of jose.JWK
 func NewTrustKeyStore(rootData map[string]jose.Jwk) (store *TrustKeyStoreImpl, err error) {
 	tmp := TrustKeyStoreImpl{}
 	tmp.keys = make(map[string]map[string]jose.Jwk)
@@ -94,12 +76,12 @@ func NewTrustKeyStore(rootData map[string]jose.Jwk) (store *TrustKeyStoreImpl, e
 	return
 }
 
-//NewTrustKeyStoreFromFile loads truststore for a
+// NewTrustKeyStoreFromFile loads truststore for a
 func NewTrustKeyStoreFromFile(root string) (store *TrustKeyStoreImpl, err error) {
 	tmp := TrustKeyStoreImpl{}
 	tmp.keys = make(map[string]map[string]jose.Jwk)
 	var entries map[string]json.RawMessage
-	rootData, err := ioutil.ReadFile(root)
+	rootData, err := os.ReadFile(root) // #nosec G304 -- file path is a caller-supplied argument to this public API
 	if err != nil {
 		return nil, err
 	}

@@ -1,39 +1,23 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
+// Package main demonstrates signing and verifying a compact JWT using gose.
 package main
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ThalesGroup/gose"
-	"github.com/ThalesGroup/gose/jose"
 	"os"
 	"time"
+
+	"github.com/eclipse-keypont/gose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const (
 	houseNumberClaim = "house_number"
-	streetClaim = "street"
+	streetClaim      = "street"
 )
 
 var (
@@ -71,15 +55,15 @@ func main() {
 	// the subject (sub), audience/s (aud), expiration (exp) and not before (nbf) fields.
 	now := time.Now().Unix()
 	standardClaims := &jose.SettableJwtClaims{
-		Subject: "my subject",
-		Audiences: jose.Audiences{Aud:[]string{"my audience"}},
+		Subject:    "my subject",
+		Audiences:  jose.Audiences{Aud: []string{"my audience"}},
 		Expiration: now + 60, // expiration in 60 seconds
-		NotBefore: now,
+		NotBefore:  now,
 	}
 	// Custom or non-standard claims can also be specified
 	customClaims := map[string]interface{}{
 		houseNumberClaim: 29,
-		streetClaim: "Acacia Road",
+		streetClaim:      "Acacia Road",
 	}
 	jwt, err := jwtSigner.Sign(standardClaims, customClaims)
 	if err != nil {
@@ -120,15 +104,15 @@ func main() {
 	fmt.Printf("Successfully verified JWT signed with key %s\n", kid)
 
 	// We can now look at the claims includes in the JWT
-	fmt.Printf("JWT Subject: %s\n", claims.SettableJwtClaims.Subject)
-	fmt.Printf("JWT Audiences: %v\n", claims.SettableJwtClaims.Audiences.Aud)
-	fmt.Printf("JWT Expiry: %d\n", claims.SettableJwtClaims.Expiration)
-	fmt.Printf("JWT Not Before: %d\n", claims.SettableJwtClaims.NotBefore)
+	fmt.Printf("JWT Subject: %s\n", claims.Subject)
+	fmt.Printf("JWT Audiences: %v\n", claims.Audiences.Aud)
+	fmt.Printf("JWT Expiry: %d\n", claims.Expiration)
+	fmt.Printf("JWT Not Before: %d\n", claims.NotBefore)
 	// Automatic claims are those specified by the JWT signer including the issued at (iat), issuer (iss) and the unique
 	// JWT ID (jti).
-	fmt.Printf("JWT Issued At: %d\n", claims.AutomaticJwtClaims.IssuedAt)
-	fmt.Printf("JWT Issuer: %s\n", claims.AutomaticJwtClaims.Issuer)
-	fmt.Printf("JWT unique ID: %s\n", claims.AutomaticJwtClaims.JwtID)
+	fmt.Printf("JWT Issued At: %d\n", claims.IssuedAt)
+	fmt.Printf("JWT Issuer: %s\n", claims.Issuer)
+	fmt.Printf("JWT unique ID: %s\n", claims.JwtID)
 
 	// We can then access any custom claims we expect to be present.
 	rawClaim, exists := claims.UntypedClaims[houseNumberClaim]

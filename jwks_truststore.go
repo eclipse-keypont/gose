@@ -1,41 +1,30 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
+
+// maxJwksBytes bounds how much of a JWKS response is read. Real key sets are a few
+// kilobytes; the cap keeps a hostile or misconfigured endpoint from handing us an
+// unbounded body to parse.
+const maxJwksBytes = 1 << 20 // 1 MiB
 
 // Interface wrapper to allow mocking of http client.
 type httpClient interface {
-	Get(url string) (resp *http.Response, err error)
+	Do(req *http.Request) (resp *http.Response, err error)
 }
 
 // JwksTrustStore is an implementation of the TrustStore interface and can be used for accessing VerificationKeys.
@@ -49,17 +38,17 @@ type JwksTrustStore struct {
 }
 
 // Add this method is not supported on a JwksTrustStore instance and will always return an error.
-func (store *JwksTrustStore) Add(issuer string, jwk jose.Jwk) error {
+func (store *JwksTrustStore) Add(_ string, _ jose.Jwk) error {
 	return errors.New("read-only trust store")
 }
 
 // Remove this method is not supported on a JwksTrustStore instance and will always return false.
-func (store *JwksTrustStore) Remove(issuer, kid string) bool {
+func (store *JwksTrustStore) Remove(_, _ string) bool {
 	return false
 }
 
 // Get returns a verification key for the given issuer and key id. If no key is found nil is returned.
-func (store *JwksTrustStore) Get(issuer, kid string) (vk VerificationKey, err error) {
+func (store *JwksTrustStore) Get(ctx context.Context, issuer, kid string) (vk VerificationKey, err error) {
 	store.lock.Lock()
 	defer store.lock.Unlock()
 
@@ -89,16 +78,23 @@ func (store *JwksTrustStore) Get(issuer, kid string) (vk VerificationKey, err er
 		}
 		// Not found. Refresh the keys
 		var response *http.Response
-		response, err = store.client.Get(store.url)
-		if err != nil {
-			err = fmt.Errorf("error encountered retrieving JWKS from %s: %v", store.url, err)
+		var req *http.Request
+		if req, err = http.NewRequestWithContext(ctx, http.MethodGet, store.url, nil); err != nil {
+			err = fmt.Errorf("error creating request for JWKS from %s: %w", store.url, err)
 			return
 		}
+		response, err = store.client.Do(req)
+		if err != nil {
+			err = fmt.Errorf("error encountered retrieving JWKS from %s: %w", store.url, err)
+			return
+		}
+		defer func() { _ = response.Body.Close() }()
 		if response.StatusCode != http.StatusOK {
 			err = fmt.Errorf("error encountered retrieving JWKS from %s: %d %s", store.url, response.StatusCode, response.Status)
 			return
 		}
-		decoder := json.NewDecoder(response.Body)
+		// Bound the response: the body is remote input and parsing it is not free.
+		decoder := json.NewDecoder(io.LimitReader(response.Body, maxJwksBytes))
 		var jwks jose.Jwks
 		if err = decoder.Decode(&jwks); err != nil {
 			err = fmt.Errorf("error encountered retrieving JWKS from %s: invalid encoding", store.url)
@@ -106,12 +102,14 @@ func (store *JwksTrustStore) Get(issuer, kid string) (vk VerificationKey, err er
 		}
 		keys := make([]VerificationKey, 0, len(jwks.Keys))
 		for _, jwk := range jwks.Keys {
-			vk, err = NewVerificationKey(jwk)
-			if err != nil {
-				err = fmt.Errorf("failed to load verification key from JWK: %v", err)
-				return
+			// Deliberately a local, not the named return: assigning to vk here left the
+			// last-parsed key in the named return, so the "not found" fall-through below
+			// handed the caller that key with a nil error instead of nothing.
+			key, keyErr := NewVerificationKey(jwk)
+			if keyErr != nil {
+				return nil, fmt.Errorf("failed to load verification key from JWK: %w", keyErr)
 			}
-			keys = append(keys, vk)
+			keys = append(keys, key)
 		}
 		// Replace the keys for our store.
 		store.keys = keys
@@ -119,13 +117,13 @@ func (store *JwksTrustStore) Get(issuer, kid string) (vk VerificationKey, err er
 		// Try and find key in newly cached keys
 		for _, key := range store.keys {
 			if key.Kid() == kid {
-				vk = key
 				return key, nil
 			}
 		}
 	}
-	// No such currently valid key or issuer
-	return
+	// No such currently valid key or issuer. Explicit, so that neither a stale vk nor a
+	// stale err can leak out through a naked return.
+	return nil, nil
 }
 
 // NewJwksKeyStore creates a new instance of a TrustStore and can be used to load verification keys.
@@ -133,8 +131,7 @@ func NewJwksKeyStore(issuerList, url string) *JwksTrustStore {
 	return &JwksTrustStore{
 		url:          url,
 		inputIssuers: issuerList,
-		client:       &http.Client {
-			// TODO: modify Get method to accept a context to manage timeouts.
+		client: &http.Client{
 			Timeout: time.Second * 30,
 		},
 	}

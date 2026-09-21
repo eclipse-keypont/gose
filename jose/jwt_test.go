@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package jose
 
@@ -258,15 +240,15 @@ func TestJwt_Unmarshal(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, test.Expected.Header.Alg, jwt.Header.Alg)
 				assert.Equal(t, test.Expected.Header.Typ, jwt.Header.Typ)
-				assert.Equal(t, test.Expected.Claims.AutomaticJwtClaims.IssuedAt, jwt.Claims.AutomaticJwtClaims.IssuedAt)
-				assert.Equal(t, test.Expected.Claims.AutomaticJwtClaims.Issuer, jwt.Claims.AutomaticJwtClaims.Issuer)
-				assert.Equal(t, test.Expected.Claims.SettableJwtClaims.Subject, jwt.Claims.SettableJwtClaims.Subject)
-				require.Equal(t, len(test.Expected.Claims.SettableJwtClaims.Audiences.Aud), len(jwt.Claims.SettableJwtClaims.Audiences.Aud))
-				for j := range test.Expected.Claims.SettableJwtClaims.Audiences.Aud {
-					assert.Equal(t, test.Expected.Claims.SettableJwtClaims.Audiences.Aud[j], jwt.Claims.SettableJwtClaims.Audiences.Aud[j])
+				assert.Equal(t, test.Expected.Claims.IssuedAt, jwt.Claims.IssuedAt)
+				assert.Equal(t, test.Expected.Claims.Issuer, jwt.Claims.Issuer)
+				assert.Equal(t, test.Expected.Claims.Subject, jwt.Claims.Subject)
+				require.Equal(t, len(test.Expected.Claims.Audiences.Aud), len(jwt.Claims.Audiences.Aud))
+				for j := range test.Expected.Claims.Audiences.Aud {
+					assert.Equal(t, test.Expected.Claims.Audiences.Aud[j], jwt.Claims.Audiences.Aud[j])
 				}
-				assert.Equal(t, test.Expected.Claims.SettableJwtClaims.Expiration, jwt.Claims.SettableJwtClaims.Expiration)
-				assert.Equal(t, test.Expected.Claims.SettableJwtClaims.NotBefore, jwt.Claims.SettableJwtClaims.NotBefore)
+				assert.Equal(t, test.Expected.Claims.Expiration, jwt.Claims.Expiration)
+				assert.Equal(t, test.Expected.Claims.NotBefore, jwt.Claims.NotBefore)
 
 				assert.Equal(t, len(test.Expected.Claims.UntypedClaims), len(jwt.Claims.UntypedClaims))
 				for k, expected := range test.Expected.Claims.UntypedClaims {
@@ -311,7 +293,7 @@ func TestJwt_Roundtrip(t *testing.T) {
 	require.NoError(t, err)
 	marhsalled := MarshalJws(body, expected.Signature)
 	var unmarshalled Jwt
-	_, err = unmarshalled.Unmarshal(string(marhsalled))
+	_, err = unmarshalled.Unmarshal(marhsalled)
 	require.NoError(t, err)
 
 	// Assert
