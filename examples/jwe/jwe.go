@@ -29,16 +29,14 @@ func fail(err error) {
 func main() {
 	// Firstly we create an encryption key for encrypting data using a Direct Encryption JWE encryption scheme.
 	generator := gose.AuthenticatedEncryptionKeyGenerator{}
-	var jwk jose.Jwk
+	// The JWK is kept to build the decryptor below — it is the key itself and is
+	// never printed. A symmetric key has no public half to show: report its identifier.
+	// Anyone copying this example into a service must never log the JWK.
 	key, jwk, err := generator.Generate(jose.AlgA256GCM, keyOps)
 	if err != nil {
 		fail(err)
 	}
-	marshalled, err := gose.JwkToString(jwk)
-	if err != nil {
-		fail(err)
-	}
-	fmt.Printf("Created encryption key JWK: %s\n", marshalled)
+	fmt.Printf("Created encryption key with kid %s\n", key.Kid())
 
 	// Create an encryptor using our key.
 	encryptor := gose.NewJweDirectEncryptorAead(key, false)
