@@ -38,6 +38,20 @@ var algToOptsMap = map[jose.Alg]crypto.SignerOpts{
 	jose.AlgES512: &ECDSAOptions{Hash: crypto.SHA512, keySizeBytes: 66, curveBits: 521, curve: elliptic.P521()},
 }
 
+// signerOptsForAlg resolves the crypto.SignerOpts for a signing algorithm.
+//
+// LoadPrivateKey also admits the RSAES-OAEP algorithms, because decryption keys go
+// through it too, but those have no entry in algToOptsMap. Indexing the map directly
+// yields a nil interface whose HashFunc() panics, so a JWK labelled "RSA-OAEP" with a
+// "sign" key_op used to crash Sign. Every lookup goes through here instead.
+func signerOptsForAlg(alg jose.Alg) (crypto.SignerOpts, error) {
+	opts, ok := algToOptsMap[alg]
+	if !ok {
+		return nil, ErrInvalidAlgorithm
+	}
+	return opts, nil
+}
+
 var validSignerOps = []jose.KeyOps{
 	jose.KeyOpsSign,
 }
@@ -58,6 +72,10 @@ func NewSigningKey(jwk jose.Jwk, required []jose.KeyOps) (SigningKey, error) {
 	ops := intersection(validSignerOps, jwk.Ops())
 	if len(ops) == 0 {
 		return nil, ErrInvalidOperations
+	}
+	// Refuse algorithms that cannot sign (e.g. RSA-OAEP) here, not in Sign.
+	if _, err := signerOptsForAlg(jwk.Alg()); err != nil {
+		return nil, err
 	}
 	/* Load the jwk */
 	k, err := LoadPrivateKey(jwk, required)
@@ -135,14 +153,17 @@ func (signer *SigningKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, 
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
+	opts, err := signerOptsForAlg(signer.jwk.Alg())
+	if err != nil {
+		return nil, err
+	}
 	/* Calculate digest. */
-	digester := algToOptsMap[signer.jwk.Alg()].HashFunc().New()
+	digester := opts.HashFunc().New()
 	if _, err := digester.Write(data); err != nil {
 		slog.Error("hash write error", "err", err)
 		return nil, err
 	}
 	digest := digester.Sum(nil)
-	opts := algToOptsMap[signer.jwk.Alg()]
 	return signer.key.Sign(rand.Reader, digest, opts)
 }
 

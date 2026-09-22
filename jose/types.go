@@ -163,6 +163,9 @@ var (
 	ErrDuplicateKeyOps = errors.New("duplicate key_ops entries")
 	//ErrJwkInconsistentCertificateFields when a certificates fields are not what was expected
 	ErrJwkInconsistentCertificateFields = errors.New("inconsistent certificate fields")
+	// ErrJwkCertificateKeyMismatch is returned when the first "x5c" certificate does not
+	// certify the public key the JWK's own members describe (RFC 7517 §4.7).
+	ErrJwkCertificateKeyMismatch = errors.New("x5c certificate does not match the jwk public key")
 	//ErrJwkInvalidFingerprintfomat the fingerprint field (x5t) is encoded in an incorrect format
 	ErrJwkInvalidFingerprintfomat = errors.New("invalid fingerprint format")
 

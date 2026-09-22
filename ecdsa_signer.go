@@ -61,7 +61,10 @@ func (signer *ECDSASigningKey) Sign(requested jose.KeyOps, data []byte) (signatu
 		return
 	}
 
-	opts := algToOptsMap[signer.jwk.Alg()]
+	opts, err := signerOptsForAlg(signer.jwk.Alg())
+	if err != nil {
+		return nil, err
+	}
 	if !opts.HashFunc().Available() {
 		err = ErrHashUnavailable
 		return
