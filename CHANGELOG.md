@@ -37,6 +37,53 @@ second major version onward).
 
 ### Fixed
 
+- **Concurrent use of one `HmacShaCryptor` crashed the process.** `Hash` ran `Reset`/`Write`/`Sum`
+  on a shared `hash.Hash` with no lock. The same instance is deliberately shared between an
+  encryptor and a verifier, and a server hands it to every request goroutine, so two callers
+  routinely interleaved — and `crypto/sha256` panics (`d.nx != 0`) when `Sum` finds the block buffer
+  another writer left half-full. Access is now serialised; the `HmacKey` interface is unchanged.
+- **JWK loading hardened against crafted documents.** `jose.UnmarshalJwk` reused one `json.Decoder`
+  across a `Seek`, so a stream of two JSON objects dispatched on the first `kty` and decoded the
+  *second* object; it now reads once and rejects anything after the first value. `LoadJwk` evaluated
+  its `required` key_ops and then returned the key with a nil error regardless; it returns
+  `ErrInvalidOperations`. `LoadPrivateKey` panicked on an RSA JWK whose `p`/`q` were missing, `0` or
+  `1`; the CRT parameters are now required together (RFC 7518 §6.3.2) and `rsa.PrivateKey.Validate`
+  runs before anything is derived from them. A JWK's `x5c[0]` must now certify the JWK's own key
+  (RFC 7517 §4.7) — previously only `x5t` was checked against it, so a certificate for a different
+  key was accepted (`jose.ErrJwkCertificateKeyMismatch`). A signing key labelled `RSA-OAEP` was
+  accepted by `NewSigningKey` and panicked in `Sign` on a nil `algToOptsMap` entry; it is refused at
+  construction and `Sign` returns `ErrInvalidAlgorithm`.
+- **RSA-OAEP JWE decryption no longer reveals whether the CEK unwrapped** (RFC 7516 §11.5,
+  RFC 3218). An unwrap failure returned the RSA error immediately while a bad tag surfaced later as
+  a GCM error, a chosen-ciphertext oracle on the OAEP layer. On unwrap failure — or a CEK whose
+  length does not match `enc`, which previously selected a different AES key size silently — a
+  random CEK of the right length is substituted and GCM fails exactly as it does for a corrupted tag.
+  The encryptor draws its CEK and IV with `io.ReadFull` (a short read from an HSM RNG used to leave
+  the tail of the key as zeros) and clears the plaintext CEK once used.
+- **Compact JWE AAD is the protected header as received**, not a re-serialisation of the parsed
+  struct (RFC 7516 §5.2 step 14). A conformant producer's member order, or members gose does not
+  model, no longer fails verification, and the tag covers what was actually sent.
+  `jose.JweRfc7516Compact` gains `RawProtectedHeader` and `AAD()`. The AES-CBC path also checks
+  block alignment before calling into the `cipher.BlockMode` (which panics rather than errors),
+  `AesCbcCryptor.Open` returns nil instead of panicking on misaligned input, and the padded
+  plaintext buffer is cleared.
+- **`JwksTrustStore` refreshes on a schedule, rate-limits misses and keeps its lock off the
+  network.** The mutex was held across the HTTP round trip, so one slow fetch stalled every JWT
+  verification in the process; it now guards only the cache, and concurrent misses share a single
+  fetch. A fetched key set is re-fetched by the next lookup once older than
+  `DefaultJwksRefreshInterval` (5 min) so a key the issuer withdrew stops verifying — previously it
+  stayed trusted until some unrelated lookup missed. If that refresh fails the stale key is withheld
+  (`ErrJwksStale`) rather than served. Lookups of unknown kids trigger at most one fetch per
+  `DefaultJwksMinRefreshInterval` (30 s); every unknown kid used to cost one HTTP round trip.
+  Both intervals are configurable via `WithJwksRefreshInterval` / `WithJwksMinRefreshInterval`
+  options on `NewJwksKeyStore`.
+- **`jose.Jwt.Unmarshal` resets the receiver.** `JwtClaims.UnmarshalJSON` assigns only the members
+  the token carries, so a `Jwt` reused across tokens kept the previous token's `iss`, `sub`, `aud`
+  and header wherever the new one omitted them; an audience check on such a struct passed on the
+  earlier token's audience. gose's own `JwtVerifierImpl` allocates a fresh `Jwt` per call and was
+  not affected.
+- The `examples/jwt` and `examples/jwe` programs printed the private signing JWK and the symmetric
+  key's JWK to stdout; they print the key identifier.
 - **RSAES-OAEP JWEs advertised the wrong `alg`.** RFC 7518 §4.3 defines `RSA-OAEP` as OAEP with
   SHA-1 and `RSA-OAEP-256` as the SHA-256 variant, but gose emitted `RSA-OAEP` for both: the three
   constants `AlgRSAOAEP`, `AlgRSAOAEPSHA1` and `AlgRSAOAEPSHA2` all held `"RSA-OAEP"`. The output
@@ -76,6 +123,10 @@ second major version onward).
 
 ### Changed
 
+- `JweDirectEncryptorBlock` documents that its IV is fixed for the instance's lifetime — the
+  `cipher.BlockMode` it wraps carries its own chaining state — so one encryptor must be built per
+  message with a fresh IV, as k8s-kms-plugin does. A per-operation IV needs a `BlockEncryptionKey`
+  API change and is tracked as open.
 - `JweHeader` and `Jwe` are marked `// Deprecated` in favor of `JweProtectedHeader` and
   `JweRfc7516Compact`.
 - Full `golangci-lint` cleanup across the codebase (`gofmt`/`goimports` comment conventions,
