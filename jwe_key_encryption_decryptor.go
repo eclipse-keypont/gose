@@ -7,13 +7,21 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"fmt"
-	"slices"
+	"io"
+	"log/slog"
 
 	"github.com/eclipse-keypont/gose/jose"
 )
 
-var supportedEncryptionAlgs = []jose.Enc{jose.EncA256GCM, jose.EncA128GCM, jose.EncA192GCM}
+// encCekLength maps each supported "enc" to the content-encryption-key length it
+// requires (RFC 7518 §5.3). It doubles as the list of supported encryptions.
+var encCekLength = map[jose.Enc]int{
+	jose.EncA128GCM: 16,
+	jose.EncA192GCM: 24,
+	jose.EncA256GCM: 32,
+}
 
 // JweRsaKeyEncryptionDecryptorImpl implements RSA Key Encryption CEK mode.
 type JweRsaKeyEncryptionDecryptorImpl struct {
@@ -45,8 +53,9 @@ func (d *JweRsaKeyEncryptionDecryptorImpl) Decrypt(jweRaw string, oaepHash crypt
 		return
 	}
 
-	// check CEK encryption is supported
-	if !slices.Contains(supportedEncryptionAlgs, jwe.ProtectedHeader.Enc) {
+	// check CEK encryption is supported, and learn the CEK length it demands
+	cekLength, encSupported := encCekLength[jwe.ProtectedHeader.Enc]
+	if !encSupported {
 		return nil, nil, ErrInvalidEncryption
 	}
 
@@ -70,10 +79,25 @@ func (d *JweRsaKeyEncryptionDecryptorImpl) Decrypt(jweRaw string, oaepHash crypt
 		oaepHash = headerHash
 	}
 
-	// Decrypt CEK
-	var cek []byte
-	if cek, err = key.Decrypt(jose.KeyOpsDecrypt, oaepHash, jwe.EncryptedKey); err != nil {
-		return
+	// Decrypt CEK.
+	//
+	// RFC 7516 §11.5 (and RFC 3218 for the underlying attack): a recipient must not let
+	// the sender learn whether the CEK unwrapped. Returning the RSA error here, while a
+	// bad tag surfaced later as a GCM error, told an attacker which of the two failed
+	// and handed them a chosen-ciphertext oracle on the OAEP layer. So an unwrap
+	// failure — and a CEK whose length does not fit the advertised "enc", which would
+	// otherwise silently select a different AES key size — substitutes a random CEK of
+	// the right length and carries on. GCM then fails exactly as it does for a bad tag,
+	// with the same error, having done the same work.
+	cek, cekErr := key.Decrypt(jose.KeyOpsDecrypt, oaepHash, jwe.EncryptedKey)
+	if cekErr != nil || len(cek) != cekLength {
+		// Attacker-triggerable, so debug not error; the detail matters to an operator
+		// chasing an HSM fault and to nobody else.
+		slog.Debug("jwe: content-encryption key unwrap failed; continuing with a random key so the failure is indistinguishable from a bad tag", "err", cekErr, "cek_len", len(cek), "enc", jwe.ProtectedHeader.Enc)
+		cek = make([]byte, cekLength)
+		if _, err = io.ReadFull(rand.Reader, cek); err != nil {
+			return nil, nil, fmt.Errorf("error generating substitute CEK: %w", err)
+		}
 	}
 	// The decrypted content-encryption key must not linger in the heap.
 	defer clear(cek)

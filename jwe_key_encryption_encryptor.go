@@ -50,11 +50,16 @@ func (e *JweRsaKeyEncryptionEncryptorImpl) Encrypt(plaintext []byte, oaepHash cr
 	// {"alg":"RSA-OAEP-256","enc":"A256GCM"}
 	protectedHeader := e.makeJweProtectedHeader(oaepAlg)
 
-	// generate the 256-bit CEK, 32 bytes long
+	// generate the 256-bit CEK, 32 bytes long.
+	// io.ReadFull, not Read: randomSource is caller-supplied (an HSM's RNG in practice)
+	// and io.Reader permits a short read with a nil error, which here would leave the
+	// tail of the key — or of the IV below — as zeros without anyone noticing.
 	cek := make([]byte, cekSize)
-	if _, err = e.randomSource.Read(cek); err != nil {
+	if _, err = io.ReadFull(e.randomSource, cek); err != nil {
 		return "", fmt.Errorf("unable to read random source to generate the CEK: %w", err)
 	}
+	// The plaintext CEK must not linger in the heap once wrapped and used.
+	defer clear(cek)
 
 	// encrypt the CEK using the recipient public key and RSAES OAEP
 	// SHA1 is still safe when used in the construction of OAEP.
@@ -65,7 +70,7 @@ func (e *JweRsaKeyEncryptionEncryptorImpl) Encrypt(plaintext []byte, oaepHash cr
 
 	// generate a random 96-bit initialization vector
 	iv := make([]byte, ivSize)
-	if _, err = e.randomSource.Read(iv); err != nil {
+	if _, err = io.ReadFull(e.randomSource, iv); err != nil {
 		return "", fmt.Errorf("unable to read random source to generate the IV: %w", err)
 	}
 
