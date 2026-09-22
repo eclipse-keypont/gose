@@ -125,8 +125,8 @@ func (d *JweRsaKeyEncryptionDecryptorImpl) Decrypt(jweRaw string, oaepHash crypt
 	ctAndTag := make([]byte, len(jwe.Ciphertext)+len(jwe.AuthenticationTag))
 	copy(ctAndTag[:len(jwe.Ciphertext)], jwe.Ciphertext)
 	copy(ctAndTag[len(jwe.Ciphertext):], jwe.AuthenticationTag)
-	// retrieve aad
-	if aad, err = jwe.ProtectedHeader.MarshalProtectedHeader(); err != nil {
+	// retrieve aad: the protected header octets as received (RFC 7516 §5.2 step 14)
+	if aad, err = jwe.AAD(); err != nil {
 		return nil, nil, fmt.Errorf("error getting AAD: %w", err)
 	}
 	plaintext, err = aead.Open(nil, jwe.InitializationVector, ctAndTag, aad)
