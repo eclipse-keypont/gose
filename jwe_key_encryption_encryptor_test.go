@@ -145,3 +145,54 @@ func TestRSAOAEPJWEEncrypt(t *testing.T) {
 	// tag
 	require.NotEmpty(t, splits[4])
 }
+
+// shortReader hands out at most n bytes per Read, all 0xA5, with a nil error —
+// legal for an io.Reader, and what a misbehaving HSM RNG looks like. The constant
+// byte is deliberate: a buffer the encryptor did not fill stays zero, so a partial
+// read is visible in the output.
+type shortReader struct {
+	n int
+}
+
+func (r shortReader) Read(p []byte) (int, error) {
+	if len(p) > r.n {
+		p = p[:r.n]
+	}
+	for i := range p {
+		p[i] = 0xA5
+	}
+	return len(p), nil
+}
+
+// TestJweRsaKeyEncryptionEncryptorImpl_Encrypt_ShortRandomRead pins the io.ReadFull
+// fix. randomSource is caller-supplied, and a reader that returns fewer bytes than
+// asked with a nil error used to leave the tail of the CEK and IV as zeros; the
+// encryptor must keep reading until the buffer is full. On the previous code the
+// IV came out as [A5 00 00 ... 00].
+func TestJweRsaKeyEncryptionEncryptorImpl_Encrypt_ShortRandomRead(t *testing.T) {
+	generator := &RsaKeyDecryptionKeyGenerator{}
+	decryptionKey, err := generator.Generate(jose.AlgRSAOAEP, 2048, []jose.KeyOps{jose.KeyOpsDecrypt})
+	require.NoError(t, err)
+	encryptionKey, err := decryptionKey.Encryptor()
+	require.NoError(t, err)
+	publicJwk, err := encryptionKey.Jwk()
+	require.NoError(t, err)
+
+	// Trickle one byte per Read; a bare Read would have stopped after the first.
+	encryptor, err := NewJweRsaKeyEncryptionEncryptorImpl(publicJwk, shortReader{n: 1})
+	require.NoError(t, err)
+	jwe, err := encryptor.Encrypt([]byte("payload"), crypto.SHA256)
+	require.NoError(t, err)
+
+	var parsed jose.JweRfc7516Compact
+	require.NoError(t, parsed.Unmarshal(jwe))
+	require.Equal(t, bytes.Repeat([]byte{0xA5}, int(ivSize)), parsed.InitializationVector)
+
+	// And the CEK was fully driven too: decrypting with the real key recovers the
+	// payload, which a half-zero CEK on the encrypting side would not.
+	store, err := NewAsymmetricDecryptionKeyStoreImpl(map[string]AsymmetricDecryptionKey{decryptionKey.Kid(): decryptionKey})
+	require.NoError(t, err)
+	pt, _, err := NewJweRsaKeyEncryptionDecryptorImpl(store).Decrypt(jwe, crypto.Hash(0))
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), pt)
+}

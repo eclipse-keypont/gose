@@ -34,6 +34,11 @@ linters:
           - errcheck
           - gosec
           - unparam
+      # Responses built here are handed to a mocked http client and closed by the
+      # store under test (JwksTrustStore.refresh); bodyclose cannot follow that.
+      - path: jwks_truststore_test\.go
+        linters:
+          - bodyclose
       # These implement/exercise the legacy (non-RFC7516-compliant) jose.Jwe and
       # jose.JweHeader types on purpose, for backwards compatibility.
       - path: jwe_direct_(en|de)cryptor_aead(_test)?\.go

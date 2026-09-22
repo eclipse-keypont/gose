@@ -120,11 +120,23 @@ func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error)
 		if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 			return nil, ErrInvalidExponent
 		}
+		// RFC 7518 §6.3.2 makes the CRT parameters all-or-nothing, and crypto/rsa needs
+		// the primes. A missing or degenerate prime (0, 1, or one that does not divide N)
+		// used to reach Precompute and the Dp/Dq/Qinv comparison below, which dereference
+		// nil for such values and panicked on import of an attacker-supplied JWK.
+		if v.P.Empty() || v.Q.Empty() || v.Dp.Empty() || v.Dq.Empty() || v.Qi.Empty() {
+			return nil, ErrInconsistentKeyValues
+		}
 
 		key.Primes = []*big.Int{v.P.Int(), v.Q.Int()}
 		key.D = v.D.Int()
 		key.E = int(v.E.Int().Int64())
 		key.N = v.N.Int()
+		// Validate checks the primes are > 1, that their product is N and that d·e ≡ 1
+		// modulo each p−1, before anything derives values from them.
+		if err := key.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInconsistentKeyValues, err)
+		}
 		key.Precompute()
 		// Check the consistency of the precomputable values contained in the JWK.
 		if key.Precomputed.Dp.Cmp(v.Dp.Int()) != 0 || key.Precomputed.Dq.Cmp(v.Dq.Int()) != 0 || key.Precomputed.Qinv.Cmp(v.Qi.Int()) != 0 {
@@ -297,7 +309,9 @@ func LoadJwk(reader io.ReadSeeker, required []jose.KeyOps) (jwk jose.Jwk, err er
 		return
 	}
 	if len(required) > 0 && !isSubset(jwk.Ops(), required) {
-		return
+		// Previously this branch returned the key with a nil error, so the
+		// required-operations check was decorative.
+		return nil, ErrInvalidOperations
 	}
 	return
 }

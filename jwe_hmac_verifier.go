@@ -24,9 +24,10 @@ func computeAL(aad []byte) []byte {
 // VerifyCompact verifies the authentication tag of a compact JWE (RFC 7516) matches its computed HMAC.
 func (verifier *JweHmacVerifierImpl) VerifyCompact(jwe jose.JweRfc7516Compact) (result bool, err error) {
 	// AAD
-	//  = ASCII(BASE64URL(UTF8(JWE Protected Header)))
+	//  = ASCII(BASE64URL(UTF8(JWE Protected Header))) — the octets as received, not a
+	//  re-serialisation of the parsed header, so a producer's own encoding verifies.
 	var aad []byte
-	if aad, err = jwe.ProtectedHeader.MarshalProtectedHeader(); err != nil {
+	if aad, err = jwe.AAD(); err != nil {
 		return false, fmt.Errorf("error marshalling the JWE Header: %w", err)
 	}
 	// Input HMAC computation

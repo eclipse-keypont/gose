@@ -68,7 +68,12 @@ type HeaderRfc7516 struct {
 
 // JweRfc7516Compact represents a JWE using the Compact Serialization as defined by https://tools.ietf.org/html/rfc7516.
 type JweRfc7516Compact struct {
-	ProtectedHeader      JweProtectedHeader
+	ProtectedHeader JweProtectedHeader
+	// RawProtectedHeader is BASE64URL(UTF8(JWE Protected Header)) exactly as received.
+	// Unmarshal sets it; Marshal does not read it. RFC 7516 §5.2 step 14 defines the
+	// AAD as these received octets, not as a re-serialisation of ProtectedHeader — see
+	// AAD. A JWE built in memory leaves it nil.
+	RawProtectedHeader   []byte
 	EncryptedKey         []byte
 	InitializationVector []byte
 	Ciphertext           []byte
@@ -213,6 +218,10 @@ func (jwe *JweRfc7516Compact) Unmarshal(src string) (err error) {
 	if err = json.Unmarshal(marshalledHeader, &jwe.ProtectedHeader); err != nil {
 		return
 	}
+	// Keep the header as sent: it is the AAD, and re-serialising ProtectedHeader
+	// would not reproduce another implementation's member order or members gose
+	// does not model.
+	jwe.RawProtectedHeader = []byte(parts[0])
 	// JWE Encrypted Key
 	//  can be a zero length key in scenarios such as direct encoding.
 	if len(parts[1]) > 0 {
@@ -245,6 +254,21 @@ func (jwe *Jwe) Marshal() string {
 		base64.RawURLEncoding.EncodeToString(jwe.Tag),
 	}
 	return strings.Join(stringz, ".")
+}
+
+// AAD returns the Additional Authenticated Data for this JWE, which RFC 7516 §5.1 step 14
+// and §5.2 step 14 define as ASCII(BASE64URL(UTF8(JWE Protected Header))).
+//
+// For a JWE that came through Unmarshal these are the received header octets, so a
+// protected header serialised by another implementation — different member order,
+// members gose does not model — authenticates exactly as it was sent, and any change to
+// it after sending is caught by the tag. A JWE assembled in memory has no received form
+// and the AAD is the serialisation of ProtectedHeader, which is what Marshal emits.
+func (jwe *JweRfc7516Compact) AAD() ([]byte, error) {
+	if len(jwe.RawProtectedHeader) > 0 {
+		return jwe.RawProtectedHeader, nil
+	}
+	return jwe.ProtectedHeader.MarshalProtectedHeader()
 }
 
 // Marshal a JWE to it's compact representation.

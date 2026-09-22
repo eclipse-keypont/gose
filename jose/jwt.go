@@ -195,8 +195,14 @@ func (jwt *Jwt) MarshalBody() (body string, err error) {
 	return jws.MarshalBody()
 }
 
-// Unmarshal string to JWT body, or error
+// Unmarshal string to JWT body, or error.
+//
+// The receiver is reset first. JwtClaims.UnmarshalJSON only assigns the members the
+// token carries, so a Jwt reused across tokens kept the previous token's "iss", "sub",
+// "aud" and the rest wherever the new one omitted them — and an audience check against
+// such a struct passed on the earlier token's audience.
 func (jwt *Jwt) Unmarshal(src string) (body string, err error) {
+	*jwt = Jwt{}
 	/* Compact JWT encoding. */
 	/* Default Exp field to maximum in case it is not set. */
 	jwt.Claims.Expiration = math.MaxInt64

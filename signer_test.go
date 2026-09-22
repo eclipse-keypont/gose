@@ -179,3 +179,34 @@ func TestNewSigningKey_FailsWhenInvalidJwk(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, signer)
 }
+
+// TestNewSigningKey_RejectsAlgWithoutSignerOpts pins the nil-dereference fix.
+// LoadPrivateKey admits the RSAES-OAEP algorithms because decryption keys share it,
+// but they have no entry in algToOptsMap. A JWK labelled "RSA-OAEP" with a "sign"
+// key_op was accepted by NewSigningKey and then crashed in Sign with a nil-pointer
+// dereference on HashFunc(). It is refused at construction now, and Sign itself
+// returns ErrInvalidAlgorithm should such a key be built another way.
+func TestNewSigningKey_RejectsAlgWithoutSignerOpts(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwk, err := JwkFromPrivateKey(key, []jose.KeyOps{jose.KeyOpsSign}, nil)
+	require.NoError(t, err)
+
+	for _, alg := range []jose.Alg{jose.AlgRSAOAEP, jose.AlgRSAOAEPSHA2, jose.Alg("bogus")} {
+		jwk.SetAlg(alg)
+		sk, err := NewSigningKey(jwk, nil)
+		require.ErrorIs(t, err, ErrInvalidAlgorithm, "alg %s", alg)
+		require.Nil(t, sk)
+	}
+
+	// Sign on a decryption key (RSA-OAEP, which legitimately has no signer opts) must
+	// error, not panic, even when its key_ops happen to permit "sign".
+	jwk.SetAlg(jose.AlgRSAOAEP)
+	jwk.SetOps([]jose.KeyOps{jose.KeyOpsSign, jose.KeyOpsDecrypt})
+	dec, err := NewRsaDecryptionKey(jwk)
+	require.NoError(t, err)
+	require.NotPanics(t, func() {
+		_, err = dec.Sign(jose.KeyOpsSign, []byte("data"))
+	})
+	require.ErrorIs(t, err, ErrInvalidAlgorithm)
+}
