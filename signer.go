@@ -22,6 +22,12 @@ type SigningKeyImpl struct {
 	jwk   jose.Jwk
 	key   crypto.Signer
 	certs []*x509.Certificate
+	// ops and alg are captured at construction. Authorization and algorithm selection
+	// must not read the mutable JWK: jwk.Ops()/jwk.Alg() return the JWK's own fields, so
+	// a caller holding the JWK could widen the key's key_ops or relabel its alg after
+	// construction and turn the key into a signing oracle (CWE-471).
+	ops []jose.KeyOps
+	alg jose.Alg
 }
 
 // algToOptsMap maps each supported signing algorithm to its crypto.SignerOpts.
@@ -85,9 +91,9 @@ func NewSigningKey(jwk jose.Jwk, required []jose.KeyOps) (SigningKey, error) {
 
 	switch jwk.(type) {
 	case *jose.PrivateRsaKey:
-		return &SigningKeyImpl{jwk: jwk, key: k, certs: jwk.X5C()}, nil
+		return &SigningKeyImpl{jwk: jwk, key: k, certs: jwk.X5C(), ops: cloneOps(jwk.Ops()), alg: jwk.Alg()}, nil
 	case *jose.PrivateEcKey:
-		return &ECDSASigningKey{jwk: jwk, key: k, certs: jwk.X5C()}, nil
+		return &ECDSASigningKey{jwk: jwk, key: k, certs: jwk.X5C(), ops: cloneOps(jwk.Ops()), alg: jwk.Alg()}, nil
 	default:
 		return nil, ErrInvalidKeyType
 	}
@@ -100,7 +106,7 @@ func (signer *SigningKeyImpl) Key() crypto.Signer {
 
 // Operations returns the allowed operations for the SigningKey
 func (signer *SigningKeyImpl) Operations() []jose.KeyOps {
-	return signer.jwk.Ops()
+	return cloneOps(signer.ops)
 }
 
 // Kid returns the jwk id
@@ -116,7 +122,7 @@ func (signer *SigningKeyImpl) Jwk() (jose.Jwk, error) {
 
 // Algorithm returns the Algorithm
 func (signer *SigningKeyImpl) Algorithm() jose.Alg {
-	return signer.jwk.Alg()
+	return signer.alg
 }
 
 // Marshal marshal the key to a JWK string, or error
@@ -148,12 +154,12 @@ func (signer *SigningKeyImpl) MarshalPem() (string, error) {
 
 // Sign perform signing operations on data, or error
 func (signer *SigningKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, error) {
-	/* Verify the operation being requested is supported by the jwk. */
-	ops := intersection(validSignerOps, signer.jwk.Ops())
+	/* Verify the operation being requested is supported by the captured policy. */
+	ops := intersection(validSignerOps, signer.ops)
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
-	opts, err := signerOptsForAlg(signer.jwk.Alg())
+	opts, err := signerOptsForAlg(signer.alg)
 	if err != nil {
 		return nil, err
 	}

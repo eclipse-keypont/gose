@@ -43,6 +43,9 @@ func generateRsaKey(alg jose.Alg, bitLen int, operations []jose.KeyOps) (jose.Jw
 	if bitLen < minimumRsaKeySize {
 		return nil, nil, ErrInvalidKeySize
 	}
+	// Clone the caller-owned operations slice so later mutation of the caller's
+	// slice cannot alter the key's authorization policy (M-G21).
+	operations = cloneOps(operations)
 	privateKey, err := rsa.GenerateKey(rand.Reader, bitLen)
 	if err != nil {
 		return nil, nil, err
@@ -83,6 +86,8 @@ func (g *ECDSASigningKeyGenerator) Generate(alg jose.Alg, operations []jose.KeyO
 	if !ok {
 		return nil, ErrInvalidAlgorithm
 	}
+	// Clone the caller-owned operations slice (M-G21).
+	operations = cloneOps(operations)
 
 	privateKey, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
@@ -106,6 +111,8 @@ func (g *AuthenticatedEncryptionKeyGenerator) Generate(alg jose.Alg, operations 
 	if !ok {
 		return nil, nil, ErrInvalidAlgorithm
 	}
+	// Clone the caller-owned operations slice (M-G21).
+	operations = cloneOps(operations)
 
 	key := make([]byte, sz)
 	if _, err := rand.Read(key); err != nil {
@@ -140,5 +147,7 @@ func (generator *RsaKeyDecryptionKeyGenerator) Generate(alg jose.Alg, bitLen int
 	return &RsaPrivateKeyImpl{
 		jwk: jwk,
 		key: key,
+		ops: cloneOps(operations),
+		alg: alg,
 	}, nil
 }

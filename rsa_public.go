@@ -19,6 +19,11 @@ import (
 type RsaPublicKeyImpl struct {
 	key rsa.PublicKey
 	jwk jose.Jwk
+	// ops and alg capture the authorization policy and algorithm at construction
+	// time so later mutation of the source JWK cannot alter this key's behaviour
+	// (M-G2/M-G3).
+	ops []jose.KeyOps
+	alg jose.Alg
 }
 
 const rsaPublicKeyPemType = "RSA PUBLIC KEY"
@@ -38,16 +43,16 @@ func (k *RsaPublicKeyImpl) Kid() string {
 
 // Algorithm returns algorithm
 func (k *RsaPublicKeyImpl) Algorithm() jose.Alg {
-	return k.jwk.Alg()
+	return k.alg
 }
 
 // Jwk returns the public JWK
 func (k *RsaPublicKeyImpl) Jwk() (jose.Jwk, error) {
-	jwk, err := JwkFromPublicKey(&k.key, k.jwk.Ops(), k.jwk.X5C())
+	jwk, err := JwkFromPublicKey(&k.key, cloneOps(k.ops), k.jwk.X5C())
 	if err != nil {
 		return nil, err
 	}
-	jwk.SetAlg(k.jwk.Alg())
+	jwk.SetAlg(k.alg)
 	return jwk, nil
 }
 
@@ -80,21 +85,21 @@ func (k *RsaPublicKeyImpl) MarshalPem() (string, error) {
 
 // Verify data matches signature
 func (k *RsaPublicKeyImpl) Verify(operation jose.KeyOps, data []byte, signature []byte) bool {
-	ops := intersection(validVerificationOps, k.jwk.Ops())
+	ops := intersection(validVerificationOps, k.ops)
 	if !isSubset(ops, []jose.KeyOps{operation}) {
 		return false
 	}
-	digester := algToOptsMap[k.jwk.Alg()].HashFunc().New()
+	digester := algToOptsMap[k.alg].HashFunc().New()
 	if _, err := digester.Write(data); err != nil {
 		slog.Error("hash write error", "err", err)
 		return false
 	}
 	digest := digester.Sum(nil)
 	var err error
-	if _, ok := pssAlgs[k.jwk.Alg()]; ok {
-		err = rsa.VerifyPSS(&k.key, algToOptsMap[k.jwk.Alg()].HashFunc(), digest, signature, algToOptsMap[k.jwk.Alg()].(*rsa.PSSOptions))
+	if _, ok := pssAlgs[k.alg]; ok {
+		err = rsa.VerifyPSS(&k.key, algToOptsMap[k.alg].HashFunc(), digest, signature, algToOptsMap[k.alg].(*rsa.PSSOptions))
 	} else {
-		err = rsa.VerifyPKCS1v15(&k.key, algToOptsMap[k.jwk.Alg()].HashFunc(), digest, signature)
+		err = rsa.VerifyPKCS1v15(&k.key, algToOptsMap[k.alg].HashFunc(), digest, signature)
 	}
 	return err == nil
 }
@@ -102,7 +107,7 @@ func (k *RsaPublicKeyImpl) Verify(operation jose.KeyOps, data []byte, signature 
 // Encrypt encrypts the given plaintext returning the derived ciphertext.
 func (k *RsaPublicKeyImpl) Encrypt(requested jose.KeyOps, hash crypto.Hash, data []byte) ([]byte, error) {
 	/* Verify the operation being requested is supported by the jwk. */
-	ops := intersection(validEncryptionOps, k.jwk.Ops())
+	ops := intersection(validEncryptionOps, k.ops)
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
@@ -128,5 +133,7 @@ func NewRsaPublicKeyImpl(jwk jose.Jwk) (*RsaPublicKeyImpl, error) {
 	return &RsaPublicKeyImpl{
 		key: rsaKey,
 		jwk: jwk,
+		ops: cloneOps(jwk.Ops()),
+		alg: jwk.Alg(),
 	}, err
 }
