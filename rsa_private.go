@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"log/slog"
+	"math/big"
 
 	"github.com/eclipse-keypont/gose/jose"
 )
@@ -19,6 +20,9 @@ import (
 type RsaPrivateKeyImpl struct {
 	jwk jose.Jwk
 	key *rsa.PrivateKey
+	// ops and alg are captured at construction; see SigningKeyImpl for why.
+	ops []jose.KeyOps
+	alg jose.Alg
 }
 
 // Key returns the underlying crypto.Signer implementation.
@@ -28,7 +32,7 @@ func (rsaKey *RsaPrivateKeyImpl) Key() crypto.Signer {
 
 // Operations returns the allowed operations for the SigningKey
 func (rsaKey *RsaPrivateKeyImpl) Operations() []jose.KeyOps {
-	return rsaKey.jwk.Ops()
+	return cloneOps(rsaKey.ops)
 }
 
 // Kid returns the jwk id
@@ -44,7 +48,7 @@ func (rsaKey *RsaPrivateKeyImpl) Jwk() (jose.Jwk, error) {
 
 // Algorithm returns the Algorithm
 func (rsaKey *RsaPrivateKeyImpl) Algorithm() jose.Alg {
-	return rsaKey.jwk.Alg()
+	return rsaKey.alg
 }
 
 // Marshal marshal the key to a JWK string, or error
@@ -71,14 +75,14 @@ func (rsaKey *RsaPrivateKeyImpl) MarshalPem() (string, error) {
 
 // Sign perform signing operations on data, or error
 func (rsaKey *RsaPrivateKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, error) {
-	/* Verify the operation being requested is supported by the jwk. */
-	ops := intersection(validSignerOps, rsaKey.jwk.Ops())
+	/* Verify the operation being requested is supported by the captured policy. */
+	ops := intersection(validSignerOps, rsaKey.ops)
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
 	// A decryption key is labelled RSA-OAEP, which has no signing options: refuse
 	// rather than dereference a nil entry.
-	opts, err := signerOptsForAlg(rsaKey.jwk.Alg())
+	opts, err := signerOptsForAlg(rsaKey.alg)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +103,7 @@ func (rsaKey *RsaPrivateKeyImpl) Certificates() []*x509.Certificate {
 
 // Decrypt decrypt the given ciphertext returning the derived plaintext.
 func (rsaKey *RsaPrivateKeyImpl) Decrypt(requested jose.KeyOps, hash crypto.Hash, ciphertext []byte) ([]byte, error) {
-	ops := intersection(validDecryptionOps, rsaKey.jwk.Ops())
+	ops := intersection(validDecryptionOps, rsaKey.ops)
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
@@ -112,9 +116,18 @@ func (rsaKey *RsaPrivateKeyImpl) publicKey() (*RsaPublicKeyImpl, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Clone the modulus: rsa.PublicKey is a struct copy but N is a *big.Int shared with
+	// the private key, so handing it out by reference would let a later mutation of one
+	// change the other (CWE-347).
+	pub := rsaKey.key.PublicKey
+	pub.N = new(big.Int).Set(rsaKey.key.N)
+	// The public JWK carries the inverted operations (decrypt -> encrypt, sign -> verify),
+	// so capture those rather than the private key's own policy.
 	return &RsaPublicKeyImpl{
-		key: rsaKey.key.PublicKey,
+		key: pub,
 		jwk: publicJwk,
+		ops: cloneOps(publicJwk.Ops()),
+		alg: publicJwk.Alg(),
 	}, nil
 }
 
@@ -141,5 +154,7 @@ func NewRsaDecryptionKey(jwk jose.Jwk) (*RsaPrivateKeyImpl, error) {
 	return &RsaPrivateKeyImpl{
 		jwk: jwk,
 		key: rsaKey,
+		ops: cloneOps(jwk.Ops()),
+		alg: jwk.Alg(),
 	}, nil
 }

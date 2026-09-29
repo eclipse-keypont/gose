@@ -58,6 +58,8 @@ func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 			result.key.E = int(v.E.Int().Int64())
 			result.jwk = jwk
 			result.jwk.SetOps(ops)
+			result.ops = cloneOps(ops)
+			result.alg = jwk.Alg()
 			return &result, nil
 		}
 		return nil, ErrUnsupportedKeyType
@@ -70,6 +72,8 @@ func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 		result.key.Y = v.Y.Int()
 		result.key.Curve = algToOptsMap[jwk.Alg()].(*ECDSAOptions).curve
 		result.jwk = jwk
+		result.ops = cloneOps(ops)
+		result.alg = jwk.Alg()
 
 		return &result, nil
 		// Symmetric (oct) key verification is not supported: the VerificationKey interface
