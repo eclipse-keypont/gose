@@ -159,3 +159,69 @@ func TestCheckConsistencyAcceptsDistinctKeyOps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, jwk.Ops(), 2)
 }
+
+// UnmarshalJwk read the whole reader with io.ReadAll before parsing, so a large or
+// unbounded stream was materialised in full. The read is now capped at MaxJwksSize.
+func TestUnmarshalJwkRejectsOversizedDocument(t *testing.T) {
+	oversized := strings.NewReader(strings.Repeat("a", MaxJwksSize+1))
+	_, err := UnmarshalJwk(oversized)
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// A document at the bound must still be parsed (and rejected for its content, not size).
+func TestUnmarshalJwkAcceptsDocumentAtBound(t *testing.T) {
+	// Pad a valid JWK with whitespace to exactly MaxJwksSize bytes.
+	doc := `{"kty":"oct","alg":"A256GCM","k":"AQ"}`
+	padded := doc + strings.Repeat(" ", MaxJwksSize-len(doc))
+	require.Len(t, padded, MaxJwksSize)
+	jwk, err := UnmarshalJwk(strings.NewReader(padded))
+	require.NoError(t, err)
+	assert.Equal(t, KtyOct, jwk.Kty())
+}
+
+// Jwks.UnmarshalJSON decoded the whole body before iterating its keys.
+func TestJwksUnmarshalRejectsOversizedDocument(t *testing.T) {
+	var jwks Jwks
+	err := jwks.UnmarshalJSON([]byte(strings.Repeat("a", MaxJwksSize+1)))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// The compact JWE parser split and base64-decoded every segment before any size check.
+func TestJweCompactUnmarshalRejectsOversizedInput(t *testing.T) {
+	var jwe JweRfc7516Compact
+	err := jwe.Unmarshal(strings.Repeat("a", MaxCompactSize+1))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// The legacy JWE parser had the same unbounded decode.
+func TestJweLegacyUnmarshalRejectsOversizedInput(t *testing.T) {
+	var jwe Jwe
+	err := jwe.Unmarshal(strings.Repeat("a", MaxCompactSize+1))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// The compact JWS parser had the same unbounded decode.
+func TestJwsUnmarshalRejectsOversizedInput(t *testing.T) {
+	var jws Jws
+	_, err := jws.Unmarshal(strings.Repeat("a", MaxCompactSize+1))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// unmarshalJSONBlob sized its buffer from the input length, so an oversized base64url
+// member — an RSA modulus, a symmetric key, an x5c certificate — was decoded into a
+// matching allocation. The check now runs before the allocation.
+func TestUnmarshalJSONBlobRejectsOversizedMember(t *testing.T) {
+	big := base64.RawURLEncoding.EncodeToString(make([]byte, MaxBlobSize+1))
+	doc := fmt.Sprintf(`{"kty":"oct","alg":"A256GCM","k":"%s"}`, big)
+	_, err := UnmarshalJwk(strings.NewReader(doc))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// A member at the bound must still decode, so the guard is not off by one.
+func TestUnmarshalJSONBlobAcceptsMemberAtBound(t *testing.T) {
+	atBound := base64.RawURLEncoding.EncodeToString(make([]byte, MaxBlobSize))
+	doc := fmt.Sprintf(`{"kty":"oct","alg":"A256GCM","k":"%s"}`, atBound)
+	jwk, err := UnmarshalJwk(strings.NewReader(doc))
+	require.NoError(t, err)
+	assert.Len(t, jwk.(*OctSecretKey).K.Bytes(), MaxBlobSize)
+}

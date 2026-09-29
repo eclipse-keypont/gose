@@ -41,6 +41,11 @@ type JweRsaKeyEncryptionDecryptorImpl struct {
 // but wrap the CEK with SHA-256; such JWEs are not portable to other implementations.
 // Do not use the override for newly produced JWEs.
 func (d *JweRsaKeyEncryptionDecryptorImpl) Decrypt(jweRaw string, oaepHash crypto.Hash) (plaintext, aad []byte, err error) {
+	// Bound before parsing: the JWE is attacker-supplied and the jose layer decodes
+	// each segment into a fresh allocation.
+	if len(jweRaw) > jose.MaxCompactSize {
+		return nil, nil, ErrInputTooLarge
+	}
 	// deserialize jwe
 	var jwe jose.JweRfc7516Compact
 	if err = jwe.Unmarshal(jweRaw); err != nil {

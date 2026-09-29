@@ -103,6 +103,16 @@ func NewTrustKeyStoreFromFile(root string) (store *TrustKeyStoreImpl, err error)
 	tmp.keys = make(map[string]map[string]jose.Jwk)
 	tmp.revoked = make(map[string]map[string]struct{})
 	var entries map[string]json.RawMessage
+	// Bound the read: the file is caller-supplied and os.ReadFile would otherwise
+	// allocate whatever size the file reports. Stat first so a huge or special file is
+	// rejected before it is read.
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > MaxKeyFileSize {
+		return nil, ErrInputTooLarge
+	}
 	rootData, err := os.ReadFile(root) // #nosec G304 -- file path is a caller-supplied argument to this public API
 	if err != nil {
 		return nil, err

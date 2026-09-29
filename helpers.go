@@ -33,6 +33,22 @@ const (
 	version1 = "v1"
 )
 
+// Input bounds for this package. The jose package bounds its own parsers; these cover
+// the file and ciphertext handling that lives here.
+const (
+	// MaxKeyFileSize bounds a JWK/truststore file read from disk. Key files are a few
+	// kilobytes; the cap stops a huge or special file from being read into memory.
+	MaxKeyFileSize = 1 << 20 // 1 MiB
+	// MaxPlaintextSize bounds a plaintext handed to the CBC cryptor. The cryptor pads
+	// to a block boundary, so an oversized input would otherwise be copied into a
+	// buffer larger than the input itself.
+	MaxPlaintextSize = 1 << 26 // 64 MiB
+	// MinRsaModulusBits is the smallest RSA modulus accepted on import. RFC 7518 §3.5
+	// requires at least 2048 bits; a smaller key is not a key we should sign or decrypt
+	// with, and accepting one silently weakens every operation that uses it.
+	MinRsaModulusBits = 2048
+)
+
 func fromBase64(b64 string) (*big.Int, error) {
 	b, err := base64.RawURLEncoding.DecodeString(b64)
 	if err != nil {
@@ -120,6 +136,12 @@ func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error)
 		if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 			return nil, ErrInvalidExponent
 		}
+		// RFC 7518 §3.5: an RSA key must be at least 2048 bits. Without this an
+		// undersized modulus imported from a JWK was accepted and used for signing and
+		// decryption, silently weakening every operation that relied on it.
+		if v.N.Int().BitLen() < MinRsaModulusBits {
+			return nil, ErrInvalidKeySize
+		}
 		// RFC 7518 §6.3.2 makes the CRT parameters all-or-nothing, and crypto/rsa needs
 		// the primes. A missing or degenerate prime (0, 1, or one that does not divide N)
 		// used to reach Precompute and the Dp/Dq/Qinv comparison below, which dereference
@@ -196,6 +218,10 @@ func LoadPublicKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.PublicKey, erro
 		/* Ensure positive 32-bit integer. */
 		if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 			return nil, ErrInvalidExponent
+		}
+		// RFC 7518 §3.5: an RSA key must be at least 2048 bits. See LoadPrivateKey.
+		if v.N.Int().BitLen() < MinRsaModulusBits {
+			return nil, ErrInvalidKeySize
 		}
 		key.E = int(v.E.Int().Int64())
 		key.N = v.N.Int()

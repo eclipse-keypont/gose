@@ -15,6 +15,11 @@ type Jwks struct {
 
 // UnmarshalJSON byte slice into key store, or error
 func (j *Jwks) UnmarshalJSON(data []byte) error {
+	// Bound the document before decoding: a JWKS body is remote input and the loop
+	// below materialises every key it names.
+	if len(data) > MaxJwksSize {
+		return ErrInputTooLarge
+	}
 	var unmarshalTo struct {
 		Keys []json.RawMessage `json:"keys"`
 	}

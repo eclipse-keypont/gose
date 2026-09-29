@@ -19,6 +19,12 @@ type JwtVerifierImpl struct {
 
 // Verify the jwt and audience is valid
 func (verifier *JwtVerifierImpl) Verify(jwt string, audience []string) (kid string, claims *jose.JwtClaims, err error) {
+	// Bound before parsing: the token is attacker-supplied and the jose layer decodes
+	// each segment into a fresh allocation.
+	if len(jwt) > jose.MaxCompactSize {
+		err = ErrInputTooLarge
+		return
+	}
 	var token jose.Jwt
 	var signed string
 	if signed, err = token.Unmarshal(jwt); err != nil {
