@@ -16,7 +16,12 @@ import (
 // TrustKeyStoreImpl implements the Trust Store API
 type TrustKeyStoreImpl struct {
 	keys map[string]map[string]jose.Jwk
-	mtx  sync.Mutex
+	// revoked records (issuer, kid) pairs that have been removed. A VerificationKey
+	// handed out by Get before the removal keeps its own copy of the key material, so
+	// deleting the map entry alone does not stop it verifying. Get consults this set so
+	// a revoked key stops being trusted even through a previously returned verifier.
+	revoked map[string]map[string]struct{}
+	mtx     sync.Mutex
 }
 
 // Add add an issuer and JWK to the truststore
@@ -45,6 +50,14 @@ func (store *TrustKeyStoreImpl) Remove(issuer, kid string) bool {
 		return false
 	}
 	delete(store.keys[issuer], kid)
+	// Record the revocation so a verifier obtained before this call stops being trusted.
+	if store.revoked == nil {
+		store.revoked = make(map[string]map[string]struct{})
+	}
+	if _, exists := store.revoked[issuer]; !exists {
+		store.revoked[issuer] = make(map[string]struct{})
+	}
+	store.revoked[issuer][kid] = struct{}{}
 	return true
 }
 
@@ -52,6 +65,13 @@ func (store *TrustKeyStoreImpl) Remove(issuer, kid string) bool {
 func (store *TrustKeyStoreImpl) Get(_ context.Context, issuer, kid string) (vk VerificationKey, err error) {
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
+	// A revoked key is unknown even if it is still present in the map (e.g. re-added
+	// after removal): the revocation is sticky until the key is explicitly re-added.
+	if revoked, ok := store.revoked[issuer]; ok {
+		if _, ok := revoked[kid]; ok {
+			return nil, ErrUnknownKey
+		}
+	}
 	if keySet, ok := store.keys[issuer]; ok {
 		if jwk, ok := keySet[kid]; ok {
 			if key, err := NewVerificationKey(jwk); err == nil {
@@ -67,6 +87,7 @@ func (store *TrustKeyStoreImpl) Get(_ context.Context, issuer, kid string) (vk V
 func NewTrustKeyStore(rootData map[string]jose.Jwk) (store *TrustKeyStoreImpl, err error) {
 	tmp := TrustKeyStoreImpl{}
 	tmp.keys = make(map[string]map[string]jose.Jwk)
+	tmp.revoked = make(map[string]map[string]struct{})
 	for issuer, jwk := range rootData {
 		if err = tmp.Add(issuer, jwk); err != nil {
 			return
@@ -80,6 +101,7 @@ func NewTrustKeyStore(rootData map[string]jose.Jwk) (store *TrustKeyStoreImpl, e
 func NewTrustKeyStoreFromFile(root string) (store *TrustKeyStoreImpl, err error) {
 	tmp := TrustKeyStoreImpl{}
 	tmp.keys = make(map[string]map[string]jose.Jwk)
+	tmp.revoked = make(map[string]map[string]struct{})
 	var entries map[string]json.RawMessage
 	rootData, err := os.ReadFile(root) // #nosec G304 -- file path is a caller-supplied argument to this public API
 	if err != nil {

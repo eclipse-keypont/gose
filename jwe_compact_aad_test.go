@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -51,7 +52,7 @@ func TestJweDirectDecryptorBlock_AadIsReceivedHeader(t *testing.T) {
 	require.NoError(t, err)
 	block, err := aes.NewCipher(key)
 	require.NoError(t, err)
-	hk := NewHmacShaCryptor("hmac0", sha256.New())
+	hk := NewHmacShaCryptor("hmac0", hmac.New(sha256.New, []byte("hmac-key")))
 	newDecryptor := func() *JweDirectDecryptorBlock {
 		return NewJweDirectDecryptorBlock(NewAesCbcCryptor(cipher.NewCBCDecrypter(block, iv), "aes0", jose.AlgA256CBC), hk)
 	}

@@ -37,6 +37,22 @@ second major version onward).
 
 ### Fixed
 
+- **`NewRsaPublicKeyImpl` rejected every RSA key.** It asserted `LoadPublicKey`'s result to the
+  value type `rsa.PublicKey`, but `LoadPublicKey` returns a `*rsa.PublicKey`, so the assertion
+  always failed and the constructor returned `ErrInvalidKeyType` for any RSA JWK.
+- **A key labelled `RSA-OAEP` verified PKCS#1 v1.5 signatures.** `RsaPublicKeyImpl.Verify` fell
+  through to `rsa.VerifyPKCS1v15` for any algorithm that was not in the PSS set, and
+  `NewRsaPublicKeyImpl` admits the RSAES-OAEP algorithms, so a verification key whose `alg` named
+  an encryption algorithm accepted signatures under an algorithm it does not name. The algorithm's
+  options are now resolved through a checked lookup and a key whose `alg` is not an RSA signature
+  algorithm verifies nothing.
+- **`NewHmacShaCryptor` accepted a bare digest as the JWE authentication tag.** The constructor took
+  any `hash.Hash`, so `sha256.New()` — an unkeyed digest anyone can recompute — could be installed
+  where a keyed MAC is required, authenticating nothing. It now requires a `crypto/hmac` MAC and
+  panics on anything else.
+- **`TrustKeyStoreImpl.Remove` did not invalidate an already-returned verifier.** Deleting the map
+  entry left a `VerificationKey` handed out earlier holding its own copy of the key material, so a
+  revoked key kept verifying. Removals are now recorded and `Get` treats a removed key as unknown.
 - **Concurrent use of one `HmacShaCryptor` crashed the process.** `Hash` ran `Reset`/`Write`/`Sum`
   on a shared `hash.Hash` with no lock. The same instance is deliberately shared between an
   encryptor and a verifier, and a server hands it to every request goroutine, so two callers

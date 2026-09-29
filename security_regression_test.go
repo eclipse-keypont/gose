@@ -8,8 +8,10 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -253,4 +255,58 @@ func TestJwksTrustStoreGetFindsPresentKid(t *testing.T) {
 		require.NotNil(t, key)
 		assert.Equal(t, kid, key.Kid())
 	}
+}
+
+// NewHmacShaCryptor accepted any hash.Hash, so a bare digest (sha256.New) could be
+// installed as the JWE authentication tag. A bare digest is unkeyed — anyone can
+// recompute it — so it authenticates nothing. Only a crypto/hmac MAC is accepted.
+func TestNewHmacShaCryptorRejectsBareDigest(t *testing.T) {
+	assert.Panics(t, func() { NewHmacShaCryptor("k", sha256.New()) },
+		"a bare digest must not be accepted as an authentication tag")
+	require.NotPanics(t, func() { NewHmacShaCryptor("k", hmac.New(sha256.New, []byte("key"))) })
+}
+
+// RsaPublicKeyImpl.Verify fell through to VerifyPKCS1v15 for any non-PSS alg, so a key
+// labelled RSA-OAEP — which NewRsaPublicKeyImpl admits — verified PKCS#1 v1.5 signatures
+// under an algorithm it does not name.
+func TestRsaPublicKeyVerifyRejectsNonSignatureAlg(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	digest := sha256.Sum256([]byte("message"))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, digest[:])
+	require.NoError(t, err)
+
+	jwk, err := JwkFromPublicKey(priv.Public(), []jose.KeyOps{jose.KeyOpsVerify}, nil)
+	require.NoError(t, err)
+	jwk.SetAlg(jose.AlgRS256)
+	key, err := NewRsaPublicKeyImpl(jwk)
+	require.NoError(t, err)
+	require.True(t, key.Verify(jose.KeyOpsVerify, []byte("message"), sig))
+
+	// Relabel as RSA-OAEP: the same signature must no longer verify.
+	jwk.SetAlg(jose.AlgRSAOAEP)
+	key, err = NewRsaPublicKeyImpl(jwk)
+	require.NoError(t, err)
+	assert.False(t, key.Verify(jose.KeyOpsVerify, []byte("message"), sig),
+		"a key labelled RSA-OAEP must not verify a PKCS#1 v1.5 signature")
+}
+
+// Remove deleted the map entry but a VerificationKey handed out earlier kept its own copy
+// of the key material, so a revoked key kept verifying. Get must treat a removed key as
+// unknown even through a previously returned verifier.
+func TestTrustKeyStoreRemoveInvalidatesVerifier(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwk, err := JwkFromPublicKey(priv.Public(), []jose.KeyOps{jose.KeyOpsVerify}, nil)
+	require.NoError(t, err)
+	store, err := NewTrustKeyStore(map[string]jose.Jwk{"issuer": jwk})
+	require.NoError(t, err)
+
+	key, err := store.Get(context.Background(), "issuer", jwk.Kid())
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	require.True(t, store.Remove("issuer", jwk.Kid()))
+	_, err = store.Get(context.Background(), "issuer", jwk.Kid())
+	assert.ErrorIs(t, err, ErrUnknownKey, "a removed key must not be returned")
 }
