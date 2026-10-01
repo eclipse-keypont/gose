@@ -127,6 +127,26 @@ second major version onward).
   `.` separators could cause excessive memory use via unbounded `strings.Split`; the internal JWKS
   fetcher also gained a request timeout instead of relying on the Go default HTTP client's
   unbounded one.
+- **Parser input bounds.** Every parser decoded attacker-supplied bytes before it could decide the
+  input was invalid, so a single document could force an allocation proportional to its own size.
+  `jose.MaxCompactSize` (1 MiB) now bounds a compact JWS/JWE/JWT before it is split and decoded
+  (`jose.Jws.Unmarshal`, `jose.Jwe.Unmarshal`, `jose.JweRfc7516Compact.Unmarshal`), `jose.MaxJwksSize`
+  (1 MiB) bounds a JWKS body and a JWK read through `jose.UnmarshalJwk`, and `jose.MaxBlobSize`
+  (64 KiB) bounds a single base64url member — an RSA modulus, a symmetric key, an `x5c` certificate —
+  in `unmarshalJSONBlob`, the one choke point they all pass through. The `gose` entry points that
+  parse a compact string (`JwtVerifierImpl.Verify`, all three JWE decryptors) apply the same bound.
+  Oversized input returns `ErrInputTooLarge` / `jose.ErrInputTooLarge`.
+- **Undersized RSA keys are refused on import** (RFC 7518 §3.5). `LoadPublicKey` and `LoadPrivateKey`
+  accepted any modulus, so a 1024-bit key from a JWK was used for verification, signing and
+  decryption. Both now require at least `MinRsaModulusBits` (2048) and return `ErrInvalidKeySize`.
+- **`NewTrustKeyStoreFromFile` bounds the file it reads.** It used `os.ReadFile`, which allocates
+  whatever size the file reports; it now stats the file and rejects anything over `MaxKeyFileSize`
+  (1 MiB) with `ErrInputTooLarge` before reading.
+- **The CBC and GCM cryptors bound their allocations.** `AesCbcCryptor.trimSize` padded the input
+  into a buffer larger than the input itself, and `Seal`/`Open` sized their destination from the
+  input, with no bound; `AesGcmCryptor.Open` copied the attacker-supplied ciphertext into a fresh
+  buffer before authenticating it. All now reject input over `MaxPlaintextSize` (64 MiB) —
+  `ErrInputTooLarge` where the method returns an error, nil where the interface has no error return.
 
 ### Added
 

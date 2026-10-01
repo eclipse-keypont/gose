@@ -20,6 +20,11 @@ type JweDirectDecryptorBlock struct {
 // Decrypt and verify the given JWE returning the plaintext.
 // never return a non nil aad. aad is just here to satisfy the JweDecryptor interface
 func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plaintext, aad []byte, err error) {
+	// Bound before parsing: the JWE is attacker-supplied and the jose layer decodes
+	// each segment into a fresh allocation.
+	if len(marshalledJwe) > jose.MaxCompactSize {
+		return nil, nil, ErrInputTooLarge
+	}
 	// The following steps respect the RFC7516 decryption instructions :
 	// https://datatracker.ietf.org/doc/html/rfc7516
 	// The message decryption process is the reverse of the encryption

@@ -28,6 +28,11 @@ func NewAesCbcCryptor(blockCipher cipher.BlockMode, kid string, alg jose.Alg) Bl
 }
 
 func (cryptor *AesCbcCryptor) trimSize(input []byte) (res []byte) {
+	// Bound before allocating: the padded buffer is larger than the input, so an
+	// oversized plaintext would otherwise be copied into an even larger allocation.
+	if len(input) > MaxPlaintextSize {
+		return nil
+	}
 	blockSize := cryptor.blockCipher.BlockSize()
 	if len(input)%blockSize != 0 {
 		multiplier := len(input) / blockSize
@@ -60,6 +65,11 @@ func getDestinationSize(inputLength int, blockSize int) int {
 
 // Seal encrypts the given plaintext returning the ciphertext.
 func (cryptor *AesCbcCryptor) Seal(plaintext []byte) []byte {
+	// Bound before allocating: the destination is sized from the plaintext, and this
+	// interface has no error return, so an oversized input yields nil.
+	if len(plaintext) > MaxPlaintextSize {
+		return nil
+	}
 	src := cryptor.trimSize(plaintext)
 	dstSize := getDestinationSize(len(plaintext), cryptor.blockCipher.BlockSize())
 	dst := make([]byte, dstSize)
@@ -74,6 +84,11 @@ func (cryptor *AesCbcCryptor) Seal(plaintext []byte) []byte {
 // Callers decrypting a JWE never reach this: JweDirectDecryptorBlock verifies the tag
 // and checks the alignment first.
 func (cryptor *AesCbcCryptor) Open(ciphertext []byte) []byte {
+	// Bound before allocating: the destination is at least as large as the input, and
+	// this interface has no error return, so an oversized input yields nil.
+	if len(ciphertext) > MaxPlaintextSize {
+		return nil
+	}
 	if len(ciphertext)%cryptor.blockCipher.BlockSize() != 0 {
 		return nil
 	}

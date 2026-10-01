@@ -166,6 +166,12 @@ func (jweHeader *HeaderRfc7516) MarshallHeader() (marshalledHeader []byte, err e
 //
 // Deprecated: Does not conform to RFC 7516. Use JweRfc7516Compact.Unmarshal instead.
 func (jwe *Jwe) Unmarshal(src string) (err error) {
+	// Bound before splitting/decoding: the input is attacker-supplied and every part
+	// below is decoded into a fresh allocation.
+	if len(src) > MaxCompactSize {
+		err = ErrInputTooLarge
+		return
+	}
 	/* Compact JWS encoding. */
 	parts := strings.SplitN(src, ".", 5)
 	if len(parts) != 5 {
@@ -199,6 +205,12 @@ func (jwe *Jwe) Unmarshal(src string) (err error) {
 
 // Unmarshal parses a compact-serialized JWE string into its constituent parts.
 func (jwe *JweRfc7516Compact) Unmarshal(src string) (err error) {
+	// Bound before splitting/decoding: the input is attacker-supplied and every part
+	// below is decoded into a fresh allocation.
+	if len(src) > MaxCompactSize {
+		err = ErrInputTooLarge
+		return
+	}
 	// Compact JWE are divided in 5 parts :
 	//   o  Protected Header
 	//   o  Encrypted Key

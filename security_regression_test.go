@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -309,4 +311,96 @@ func TestTrustKeyStoreRemoveInvalidatesVerifier(t *testing.T) {
 	require.True(t, store.Remove("issuer", jwk.Kid()))
 	_, err = store.Get(context.Background(), "issuer", jwk.Kid())
 	assert.ErrorIs(t, err, ErrUnknownKey, "a removed key must not be returned")
+}
+
+// RFC 7518 §3.5 requires an RSA modulus of at least 2048 bits. LoadPublicKey accepted
+// any modulus, so an undersized key imported from a JWK was used for verification.
+func TestLoadPublicKeyRejectsUndersizedRsaModulus(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+	jwk, err := JwkFromPublicKey(&key.PublicKey, []jose.KeyOps{jose.KeyOpsVerify}, nil)
+	require.NoError(t, err)
+
+	_, err = LoadPublicKey(jwk, nil)
+	assert.ErrorIs(t, err, ErrInvalidKeySize)
+}
+
+// LoadPrivateKey had the same gap on the signing/decryption path.
+func TestLoadPrivateKeyRejectsUndersizedRsaModulus(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+	jwk, err := JwkFromPrivateKey(key, []jose.KeyOps{jose.KeyOpsSign}, nil)
+	require.NoError(t, err)
+
+	_, err = LoadPrivateKey(jwk, nil)
+	assert.ErrorIs(t, err, ErrInvalidKeySize)
+}
+
+// A key at the minimum must still load, so the guard is not over-broad.
+func TestLoadPublicKeyAcceptsMinimumRsaModulus(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwk, err := JwkFromPublicKey(&key.PublicKey, []jose.KeyOps{jose.KeyOpsVerify}, nil)
+	require.NoError(t, err)
+
+	_, err = LoadPublicKey(jwk, nil)
+	require.NoError(t, err)
+}
+
+// NewTrustKeyStoreFromFile read the whole file with os.ReadFile, so a huge or special
+// file was materialised in full. The read is now bounded by MaxKeyFileSize.
+func TestNewTrustKeyStoreFromFileRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trust.json")
+	require.NoError(t, os.WriteFile(path, make([]byte, MaxKeyFileSize+1), 0o600))
+
+	_, err := NewTrustKeyStoreFromFile(path)
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// AesCbcCryptor.trimSize padded the input into a buffer larger than the input itself,
+// with no bound on the input length.
+func TestAesCbcCryptorRejectsOversizedPlaintext(t *testing.T) {
+	block, err := aes.NewCipher(make([]byte, 32))
+	require.NoError(t, err)
+	cryptor := NewAesCbcCryptor(cipher.NewCBCEncrypter(block, make([]byte, aes.BlockSize)),
+		"kid", jose.AlgA256CBC)
+
+	assert.Nil(t, cryptor.Seal(make([]byte, MaxPlaintextSize+1)))
+	assert.Nil(t, cryptor.Open(make([]byte, MaxPlaintextSize+1)))
+}
+
+// AesGcmCryptor.Open copied the attacker-supplied ciphertext into a fresh buffer before
+// authenticating it.
+func TestAesGcmCryptorOpenRejectsOversizedCiphertext(t *testing.T) {
+	cryptor := newTestGcmCryptor(t, jose.KeyOpsDecrypt)
+	_, err := cryptor.Open(jose.KeyOpsDecrypt, make([]byte, 12),
+		make([]byte, MaxPlaintextSize+1), nil, make([]byte, 16))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// JwtVerifierImpl.Verify parsed the token before any size check.
+func TestJwtVerifierRejectsOversizedToken(t *testing.T) {
+	store, err := NewTrustKeyStore(map[string]jose.Jwk{})
+	require.NoError(t, err)
+	verifier := NewJwtVerifier(store)
+
+	_, _, err = verifier.Verify(strings.Repeat("a", jose.MaxCompactSize+1), []string{"aud"})
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// Every JWE decryptor parsed the compact string before any size check.
+func TestJweDecryptorsRejectOversizedInput(t *testing.T) {
+	oversized := strings.Repeat("a", jose.MaxCompactSize+1)
+
+	aead := NewJweDirectDecryptorAeadImpl(nil)
+	_, _, err := aead.Decrypt(oversized)
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+
+	block := NewJweDirectDecryptorBlock(nil, nil)
+	_, _, err = block.Decrypt(oversized)
+	assert.ErrorIs(t, err, ErrInputTooLarge)
+
+	rsaDec := NewJweRsaKeyEncryptionDecryptorImpl(nil)
+	_, _, err = rsaDec.Decrypt(oversized, crypto.Hash(0))
+	assert.ErrorIs(t, err, ErrInputTooLarge)
 }

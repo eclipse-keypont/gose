@@ -105,6 +105,12 @@ func (jws *Jws) Body() (body string, err error) {
 
 // Unmarshal to body string, or error
 func (jws *Jws) Unmarshal(src string) (body string, err error) {
+	// Bound before splitting/decoding: the input is attacker-supplied and every part
+	// below is decoded into a fresh allocation.
+	if len(src) > MaxCompactSize {
+		err = ErrInputTooLarge
+		return
+	}
 	/* Compact JWS encoding. */
 	parts := strings.SplitN(src, ".", 3)
 	if len(parts) != 3 {
