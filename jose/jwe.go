@@ -10,6 +10,29 @@ import (
 	"strings"
 )
 
+// supportedJweAlgs is the set of "alg" values gose can act on. RFC 7516 §4.1.1 requires
+// "alg" to be present, and a header naming an algorithm gose does not implement cannot be
+// processed. Rejecting it at parse time keeps downstream code from acting on a header it
+// has not validated (CWE-807).
+var supportedJweAlgs = map[Alg]struct{}{
+	AlgDir:         {},
+	AlgRSAOAEP:     {},
+	AlgRSAOAEPSHA2: {},
+	AlgA128GCM:     {},
+	AlgA192GCM:     {},
+	AlgA256GCM:     {},
+	AlgA256CBC:     {},
+}
+
+// supportedJweEncs is the set of "enc" values gose can act on. RFC 7516 §4.1.2 requires
+// "enc" to be present.
+var supportedJweEncs = map[Enc]struct{}{
+	EncA128GCM: {},
+	EncA192GCM: {},
+	EncA256GCM: {},
+	EncA256CBC: {},
+}
+
 // JweCustomHeaderFields custom JWE defined fields.
 type JweCustomHeaderFields struct {
 	// Other AAD for transporting AAD around with the JWE...
@@ -228,6 +251,18 @@ func (jwe *JweRfc7516Compact) Unmarshal(src string) (err error) {
 		return
 	}
 	if err = json.Unmarshal(marshalledHeader, &jwe.ProtectedHeader); err != nil {
+		return
+	}
+	// RFC 7516 §4.1.1 and §4.1.2 require "alg" and "enc" to be present, and a header
+	// naming an algorithm gose does not implement cannot be processed. Validating here
+	// means every consumer of a parsed JWE sees a header that has already been checked
+	// against the supported set, rather than trusting it (CWE-807).
+	if _, ok := supportedJweAlgs[jwe.ProtectedHeader.Alg]; !ok {
+		err = fmt.Errorf("%w: unsupported JWE alg %q", ErrInvalidAlgorithm, jwe.ProtectedHeader.Alg)
+		return
+	}
+	if _, ok := supportedJweEncs[jwe.ProtectedHeader.Enc]; !ok {
+		err = fmt.Errorf("%w: unsupported JWE enc %q", ErrInvalidEncryption, jwe.ProtectedHeader.Enc)
 		return
 	}
 	// Keep the header as sent: it is the AAD, and re-serialising ProtectedHeader

@@ -6,6 +6,7 @@ package jose
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -224,4 +225,82 @@ func TestUnmarshalJSONBlobAcceptsMemberAtBound(t *testing.T) {
 	jwk, err := UnmarshalJwk(strings.NewReader(doc))
 	require.NoError(t, err)
 	assert.Len(t, jwk.(*OctSecretKey).K.Bytes(), MaxBlobSize)
+}
+
+// compactJwe assembles a compact JWE from a raw protected-header JSON object and
+// placeholder segments.
+func compactJwe(header string) string {
+	b64 := base64.RawURLEncoding.EncodeToString
+	return strings.Join([]string{
+		b64([]byte(header)), "", b64([]byte("iv")), b64([]byte("ct")), b64([]byte("tag")),
+	}, ".")
+}
+
+// M-G20: JweRfc7516Compact.Unmarshal parsed the protected header and handed it to
+// consumers without checking that "alg" and "enc" were present and supported. RFC 7516
+// §4.1.1/§4.1.2 require both, and a header naming an algorithm gose cannot perform must
+// not be acted on.
+func TestJweCompactUnmarshalRejectsUnsupportedHeader(t *testing.T) {
+	cases := map[string]string{
+		"missing alg":       `{"enc":"A256GCM"}`,
+		"missing enc":       `{"alg":"dir"}`,
+		"unknown alg":       `{"alg":"none","enc":"A256GCM"}`,
+		"unknown enc":       `{"alg":"dir","enc":"A999GCM"}`,
+		"empty header":      `{}`,
+		"unsupported combo": `{"alg":"HS256","enc":"A256GCM"}`,
+	}
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			var jwe JweRfc7516Compact
+			err := jwe.Unmarshal(compactJwe(header))
+			require.Error(t, err)
+			assert.True(t,
+				errors.Is(err, ErrInvalidAlgorithm) || errors.Is(err, ErrInvalidEncryption),
+				"expected an algorithm/encryption error, got %v", err)
+		})
+	}
+}
+
+// A header naming a supported alg/enc pair must still parse.
+func TestJweCompactUnmarshalAcceptsSupportedHeader(t *testing.T) {
+	for _, header := range []string{
+		`{"alg":"dir","enc":"A256GCM"}`,
+		`{"alg":"RSA-OAEP","enc":"A256GCM"}`,
+		`{"alg":"RSA-OAEP-256","enc":"A128GCM"}`,
+		`{"alg":"A256CBC","enc":"A256CBC"}`,
+	} {
+		t.Run(header, func(t *testing.T) {
+			var jwe JweRfc7516Compact
+			require.NoError(t, jwe.Unmarshal(compactJwe(header)))
+		})
+	}
+}
+
+// M-G10: a JWK whose "kty" does not match the type it is being decoded as must be
+// rejected. The UnmarshalJSON methods used to overwrite the ErrUnexpectedKeyType with
+// the result of CheckConsistency, so a wrong-typed document could be accepted.
+func TestJwkUnmarshalRejectsWrongKeyType(t *testing.T) {
+	cases := map[string]struct {
+		doc  string
+		into func() any
+	}{
+		"oct as RSA": {
+			doc:  `{"kty":"oct","k":"AQ"}`,
+			into: func() any { return &PublicRsaKey{} },
+		},
+		"RSA as EC": {
+			doc:  `{"kty":"RSA","n":"AQ","e":"AQAB"}`,
+			into: func() any { return &PublicEcKey{} },
+		},
+		"EC as oct": {
+			doc:  `{"kty":"EC","crv":"P-256","x":"AQ","y":"AQ"}`,
+			into: func() any { return &OctSecretKey{} },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := json.Unmarshal([]byte(tc.doc), tc.into())
+			assert.ErrorIs(t, err, ErrUnexpectedKeyType)
+		})
+	}
 }

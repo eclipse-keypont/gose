@@ -63,6 +63,23 @@ second major version onward).
   copy. The key generators clone the caller-supplied `operations` slice for the same reason, and
   `RsaPrivateKeyImpl.publicKey` clones the RSA modulus rather than sharing the `*big.Int` with the
   private key (CWE-347).
+- **A JWT with no `exp` no longer lives forever.** `jose.Jwt.Unmarshal` defaulted a missing
+  `Expiration` to `math.MaxInt64`, so the verifier's `Expiration <= now` check could never fail and
+  a token without an expiry was accepted indefinitely (CWE-613/CWE-1188). The default is removed;
+  a zero `Expiration` is in the past and the verifier rejects the token with `ErrInvalidJwtTimeframe`.
+- **A compact JWE's protected header is validated at parse time.** `JweRfc7516Compact.Unmarshal`
+  parsed `alg`/`enc` and handed them to consumers unchecked. RFC 7516 §4.1.1/§4.1.2 require both,
+  and a header naming an algorithm gose cannot perform must not be acted on, so an absent or
+  unsupported `alg`/`enc` is now rejected with `jose.ErrInvalidAlgorithm`/`jose.ErrInvalidEncryption`
+  (CWE-807).
+- **`PublicFromPrivate` derives an EC public point from `d`.** It copied the private JWK's `x`/`y`
+  members, so a JWK whose `x`/`y` disagreed with `d` produced a public key unrelated to the private
+  key it came from (CWE-325). The point is now computed with `ScalarBaseMult` and `crv` is set from
+  the curve.
+- **The direct-AEAD encryptor checks the backend tag length before trimming the external IV.** With
+  an externally-generated IV the nonce is appended to the tag and then sliced off; a backend
+  returning a tag shorter than the nonce made the slice expressions panic (CWE-248). The length is
+  checked first and `ErrInvalidAuthenticationTag` is returned.
 - **Concurrent use of one `HmacShaCryptor` crashed the process.** `Hash` ran `Reset`/`Write`/`Sum`
   on a shared `hash.Hash` with no lock. The same instance is deliberately shared between an
   encryptor and a verifier, and a server hands it to every request goroutine, so two callers

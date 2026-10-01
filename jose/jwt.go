@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"reflect"
 	"strings"
 )
@@ -204,8 +203,10 @@ func (jwt *Jwt) MarshalBody() (body string, err error) {
 func (jwt *Jwt) Unmarshal(src string) (body string, err error) {
 	*jwt = Jwt{}
 	/* Compact JWT encoding. */
-	/* Default Exp field to maximum in case it is not set. */
-	jwt.Claims.Expiration = math.MaxInt64
+	// Expiration is deliberately left at its zero value when the token carries no "exp".
+	// It used to default to math.MaxInt64, so a token with no expiry claim was valid
+	// forever: the verifier's "exp <= now" test could never fire (CWE-613/CWE-1188).
+	// Zero is in the past, so a token without "exp" is now rejected by the verifier.
 	jws := Jws{
 		Header:  &jwt.Header,
 		Payload: &jwt.Claims,

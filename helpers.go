@@ -423,8 +423,22 @@ func PublicFromPrivate(in jose.Jwk) (jose.Jwk, error) {
 		result.PublicRsaKeyFields = k.PublicRsaKeyFields
 		out = &result
 	case *jose.PrivateEcKey:
+		// Derive the public point from the private scalar rather than copying the "x"/"y"
+		// members. A JWK whose "x"/"y" disagree with "d" would otherwise yield a public key
+		// that does not correspond to the private key it was derived from (CWE-325).
+		curve, err := ecdsaCurveForAlg(k.Alg())
+		if err != nil {
+			return nil, err
+		}
+		if k.D.Empty() {
+			return nil, ErrInvalidKeyType
+		}
+		x, y := curve.ScalarBaseMult(k.D.Int().Bytes())
 		var result jose.PublicEcKey
 		result.PublicEcKeyFields = k.PublicEcKeyFields
+		result.X.Set(x)
+		result.Y.Set(y)
+		result.Crv = jose.Crv(curve.Params().Name)
 		out = &result
 	default:
 		return nil, ErrUnsupportedKeyType

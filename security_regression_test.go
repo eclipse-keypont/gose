@@ -8,6 +8,8 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
@@ -15,6 +17,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/eclipse-keypont/gose/jose"
@@ -484,4 +488,118 @@ func TestKeyGeneratorClonesOperations(t *testing.T) {
 	require.NoError(t, err)
 	_, err = key.Sign(jose.KeyOpsVerify, []byte("data"))
 	assert.ErrorIs(t, err, ErrInvalidOperations)
+}
+
+// M-G5: the JWT parser used to default a missing "exp" to math.MaxInt64, so a token
+// without an expiry never failed the verifier's Expiration <= now check and lived
+// forever. A zero Expiration is in the past, so the verifier now rejects it.
+func TestJwtVerifyRejectsTokenWithoutExpiration(t *testing.T) {
+	generator := &RsaSigningKeyGenerator{}
+	signingKey, err := generator.Generate(jose.AlgRS256, 2048, []jose.KeyOps{jose.KeyOpsSign})
+	require.NoError(t, err)
+	verificationKey, err := signingKey.Verifier()
+	require.NoError(t, err)
+	jwk, err := verificationKey.Jwk()
+	require.NoError(t, err)
+
+	signer := NewJwtSigner("issuer", signingKey)
+	ks, err := NewTrustKeyStore(map[string]jose.Jwk{signer.Issuer(): jwk})
+	require.NoError(t, err)
+	verifier := NewJwtVerifier(ks)
+
+	claims := jose.SettableJwtClaims{
+		Audiences: jose.Audiences{Aud: []string{"audience"}},
+		Subject:   "subject",
+	}
+	token, err := signer.Sign(&claims, map[string]interface{}{})
+	require.NoError(t, err)
+
+	_, _, err = verifier.Verify(token, []string{"audience"})
+	assert.ErrorIs(t, err, ErrInvalidJwtTimeframe,
+		"a token with no exp must not be accepted as non-expiring")
+}
+
+// M-G17: with an externally-generated IV the encryptor trims the nonce the backend
+// appended to the tag. A backend returning a tag shorter than the nonce made the slice
+// expressions panic; the length is now checked first.
+func TestJweDirectEncryptorAeadRejectsShortTag(t *testing.T) {
+	keyMock := &authenticatedEncryptionKeyMock{}
+	keyMock.On("Kid").Return("unique")
+	keyMock.On("Algorithm").Return(jose.AlgA256GCM)
+	keyMock.On("GenerateNonce").Return(make([]byte, 12), nil)
+	// Tag shorter than the 12-byte nonce the backend claims to have appended.
+	keyMock.On("Seal", jose.KeyOpsEncrypt, mock.Anything, mock.Anything, mock.Anything).
+		Return([]byte("ciphertext"), []byte("short"), nil)
+
+	encryptor := NewJweDirectEncryptorAead(keyMock, true)
+	_, err := encryptor.Encrypt([]byte("plaintext"), nil)
+	assert.ErrorIs(t, err, ErrInvalidAuthenticationTag)
+}
+
+// M-G18: PublicFromPrivate copied the "x"/"y" members of a private EC JWK instead of
+// deriving the public point from "d". A JWK whose "x"/"y" disagree with "d" therefore
+// produced a public key unrelated to the private key it came from.
+func TestPublicFromPrivateDerivesEcPointFromD(t *testing.T) {
+	curve := elliptic.P256()
+	d, err := rand.Int(rand.Reader, curve.Params().N)
+	require.NoError(t, err)
+	expectedX, expectedY := curve.ScalarBaseMult(d.Bytes())
+
+	priv := &jose.PrivateEcKey{}
+	priv.Crv = jose.CrvP256
+	priv.D.Set(d)
+	// Deliberately inconsistent public point.
+	priv.X.Set(big.NewInt(1))
+	priv.Y.Set(big.NewInt(2))
+	priv.SetAlg(jose.AlgES256)
+	priv.SetKid("k1")
+	priv.SetOps([]jose.KeyOps{jose.KeyOpsSign})
+
+	pub, err := PublicFromPrivate(priv)
+	require.NoError(t, err)
+	pubEc, ok := pub.(*jose.PublicEcKey)
+	require.True(t, ok, "expected a public EC key")
+	assert.Zero(t, pubEc.X.Int().Cmp(expectedX), "X must be derived from d")
+	assert.Zero(t, pubEc.Y.Int().Cmp(expectedY), "Y must be derived from d")
+	assert.Equal(t, jose.CrvP256, pubEc.Crv)
+}
+
+// The derived public key must actually verify a signature made by the private key.
+func TestPublicFromPrivateDerivedKeyVerifies(t *testing.T) {
+	curve := elliptic.P256()
+	d, err := rand.Int(rand.Reader, curve.Params().N)
+	require.NoError(t, err)
+	x, y := curve.ScalarBaseMult(d.Bytes())
+
+	priv := &jose.PrivateEcKey{}
+	priv.Crv = jose.CrvP256
+	priv.D.Set(d)
+	priv.X.Set(big.NewInt(1))
+	priv.Y.Set(big.NewInt(2))
+	priv.SetAlg(jose.AlgES256)
+	priv.SetKid("k1")
+	priv.SetOps([]jose.KeyOps{jose.KeyOpsSign})
+
+	pub, err := PublicFromPrivate(priv)
+	require.NoError(t, err)
+	pubEc, ok := pub.(*jose.PublicEcKey)
+	require.True(t, ok)
+
+	ecKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		D:         d,
+	}
+	data := []byte("data to be signed")
+	digest := sha256.Sum256(data)
+	r, s, err := ecdsa.Sign(rand.Reader, ecKey, digest[:])
+	require.NoError(t, err)
+	// The verifier expects the JWS raw r||s encoding, each padded to the curve size.
+	keySize := (curve.Params().BitSize + 7) / 8
+	sig := make([]byte, 2*keySize)
+	r.FillBytes(sig[:keySize])
+	s.FillBytes(sig[keySize:])
+
+	verifier, err := NewVerificationKey(pubEc)
+	require.NoError(t, err)
+	assert.True(t, verifier.Verify(jose.KeyOpsVerify, data, sig))
 }
