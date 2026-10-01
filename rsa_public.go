@@ -84,17 +84,27 @@ func (k *RsaPublicKeyImpl) Verify(operation jose.KeyOps, data []byte, signature 
 	if !isSubset(ops, []jose.KeyOps{operation}) {
 		return false
 	}
-	digester := algToOptsMap[k.jwk.Alg()].HashFunc().New()
+	// Resolve the algorithm's options through a checked lookup. A key whose "alg" is not
+	// an RSA signature algorithm — RSA-OAEP, or an EC alg on an RSA key — has no entry,
+	// and indexing the map directly yields a nil interface whose HashFunc() panics.
+	// Previously any non-PSS alg fell through to VerifyPKCS1v15, so a key labelled
+	// RSA-OAEP (which NewRsaPublicKeyImpl admits) verified PKCS#1 v1.5 signatures under
+	// an algorithm it does not name.
+	opts, ok := algToOptsMap[k.jwk.Alg()]
+	if !ok {
+		return false
+	}
+	digester := opts.HashFunc().New()
 	if _, err := digester.Write(data); err != nil {
 		slog.Error("hash write error", "err", err)
 		return false
 	}
 	digest := digester.Sum(nil)
 	var err error
-	if _, ok := pssAlgs[k.jwk.Alg()]; ok {
-		err = rsa.VerifyPSS(&k.key, algToOptsMap[k.jwk.Alg()].HashFunc(), digest, signature, algToOptsMap[k.jwk.Alg()].(*rsa.PSSOptions))
+	if _, isPss := pssAlgs[k.jwk.Alg()]; isPss {
+		err = rsa.VerifyPSS(&k.key, opts.HashFunc(), digest, signature, opts.(*rsa.PSSOptions))
 	} else {
-		err = rsa.VerifyPKCS1v15(&k.key, algToOptsMap[k.jwk.Alg()].HashFunc(), digest, signature)
+		err = rsa.VerifyPKCS1v15(&k.key, opts.HashFunc(), digest, signature)
 	}
 	return err == nil
 }
@@ -121,12 +131,14 @@ func NewRsaPublicKeyImpl(jwk jose.Jwk) (*RsaPublicKeyImpl, error) {
 	if err != nil {
 		return nil, err
 	}
-	rsaKey, ok := publicKey.(rsa.PublicKey)
+	// LoadPublicKey returns a *rsa.PublicKey; asserting the value type here always
+	// failed, so this constructor rejected every RSA key with ErrInvalidKeyType.
+	rsaKey, ok := publicKey.(*rsa.PublicKey)
 	if !ok {
 		return nil, ErrInvalidKeyType
 	}
 	return &RsaPublicKeyImpl{
-		key: rsaKey,
+		key: *rsaKey,
 		jwk: jwk,
-	}, err
+	}, nil
 }

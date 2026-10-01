@@ -4,6 +4,7 @@
 package gose
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -31,7 +32,7 @@ func TestJweDirectEncryptorBlock(t *testing.T) {
 		mode: ModeEncrypt,
 	}
 	bekEnc := NewAesCbcCryptor(mcEnc, expectedAesKid, expectedAlg)
-	hk := NewHmacShaCryptor(expectedHmacKid, sha256.New())
+	hk := NewHmacShaCryptor(expectedHmacKid, hmac.New(sha256.New, []byte("hmac-key")))
 	encryptor := NewJweDirectEncryptorBlock(bekEnc, hk, iv)
 	mcEnc.On("BlockSize").Return(len(iv))
 
