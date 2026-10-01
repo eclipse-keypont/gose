@@ -86,6 +86,19 @@ func intersection(first []jose.KeyOps, second []jose.KeyOps) []jose.KeyOps {
 	return result
 }
 
+// cloneOps returns a copy of ops. Key types capture their key_ops at construction and
+// must not alias the caller's slice: a JWK's Ops() returns the backing slice, so a
+// caller that later mutates it would otherwise change the key's authorization policy
+// (CWE-471, mutable JWK metadata).
+func cloneOps(ops []jose.KeyOps) []jose.KeyOps {
+	if ops == nil {
+		return nil
+	}
+	out := make([]jose.KeyOps, len(ops))
+	copy(out, ops)
+	return out
+}
+
 // ecdsaCurveForAlg resolves the elliptic curve for an EC JWK's "alg".
 //
 // A JWK's Go type is chosen from "kty" alone and is never cross-validated against

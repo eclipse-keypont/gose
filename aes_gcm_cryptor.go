@@ -126,7 +126,9 @@ func NewAesGcmCryptorFromJwk(jwk jose.Jwk, required []jose.KeyOps) (AeadEncrypti
 		alg:  jwk.Alg(),
 		aead: aead,
 		rng:  rand.Reader,
-		opts: jwk.Ops(),
+		// Clone the JWK-owned operations slice so later mutation of the JWK
+		// cannot alter the cryptor's authorization policy (M-G4).
+		opts: cloneOps(jwk.Ops()),
 	}, nil
 }
 
@@ -137,6 +139,7 @@ func NewAesGcmCryptor(aead cipher.AEAD, rng io.Reader, kid string, alg jose.Alg,
 		alg:  alg,
 		aead: aead,
 		rng:  rng,
-		opts: operations,
+		// Clone the caller-owned operations slice (M-G4).
+		opts: cloneOps(operations),
 	}, nil
 }

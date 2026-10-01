@@ -53,6 +53,16 @@ second major version onward).
 - **`TrustKeyStoreImpl.Remove` did not invalidate an already-returned verifier.** Deleting the map
   entry left a `VerificationKey` handed out earlier holding its own copy of the key material, so a
   revoked key kept verifying. Removals are now recorded and `Get` treats a removed key as unknown.
+- **Key objects no longer read their authorization policy or algorithm from the mutable JWK.**
+  `SigningKeyImpl`, `ECDSASigningKey`, `RsaPrivateKeyImpl`, `RsaPublicKeyImpl` and
+  `ECVerificationKeyImpl` called `jwk.Ops()`/`jwk.Alg()` on every operation, and `AesGcmCryptor`
+  aliased the caller's `key_ops` slice. A caller holding the JWK — or the slice it was built from —
+  could widen `key_ops` or relabel `alg` after construction and turn a sign-only key into a signing
+  oracle, or change the digest and signature scheme in use (CWE-471, mutable JWK metadata). The
+  policy and algorithm are now captured and cloned at construction, and `Operations()` returns a
+  copy. The key generators clone the caller-supplied `operations` slice for the same reason, and
+  `RsaPrivateKeyImpl.publicKey` clones the RSA modulus rather than sharing the `*big.Int` with the
+  private key (CWE-347).
 - **Concurrent use of one `HmacShaCryptor` crashed the process.** `Hash` ran `Reset`/`Write`/`Sum`
   on a shared `hash.Hash` with no lock. The same instance is deliberately shared between an
   encryptor and a verifier, and a server hands it to every request goroutine, so two callers

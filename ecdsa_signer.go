@@ -38,11 +38,14 @@ type ECDSASigningKey struct {
 	jwk   jose.Jwk
 	key   crypto.Signer
 	certs []*x509.Certificate
+	// ops and alg are captured at construction; see SigningKeyImpl for why.
+	ops []jose.KeyOps
+	alg jose.Alg
 }
 
 // Algorithm returns the jose.Alg for this key
 func (signer ECDSASigningKey) Algorithm() jose.Alg {
-	return signer.jwk.Alg()
+	return signer.alg
 }
 
 // Key returns the underlying key used to sign
@@ -55,13 +58,13 @@ func (signer *ECDSASigningKey) Key() crypto.Signer {
 // The serialization format is chosen instead to match that defined in the JSON Web Signature spec
 // https://tools.ietf.org/html/rfc7515#appendix-A.3.1.
 func (signer *ECDSASigningKey) Sign(requested jose.KeyOps, data []byte) (signature []byte, err error) {
-	ops := intersection(validSignerOps, signer.jwk.Ops())
+	ops := intersection(validSignerOps, signer.ops)
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		err = ErrInvalidOperations
 		return
 	}
 
-	opts, err := signerOptsForAlg(signer.jwk.Alg())
+	opts, err := signerOptsForAlg(signer.alg)
 	if err != nil {
 		return nil, err
 	}

@@ -404,3 +404,84 @@ func TestJweDecryptorsRejectOversizedInput(t *testing.T) {
 	_, _, err = rsaDec.Decrypt(oversized, crypto.Hash(0))
 	assert.ErrorIs(t, err, ErrInputTooLarge)
 }
+
+// SigningKeyImpl read jwk.Ops() on every Sign, so a caller holding the JWK could widen
+// its key_ops after construction and turn a sign-only key into a signing oracle for
+// operations it was never granted (CWE-471, mutable JWK metadata).
+func TestSigningKeyCapturesOpsAtConstruction(t *testing.T) {
+	gen := &RsaSigningKeyGenerator{}
+	key, err := gen.Generate(jose.AlgRS256, 2048, []jose.KeyOps{jose.KeyOpsSign})
+	require.NoError(t, err)
+
+	jwk, err := key.Jwk()
+	require.NoError(t, err)
+	// Widen the JWK's key_ops after the key was built.
+	jwk.SetOps([]jose.KeyOps{jose.KeyOpsSign, jose.KeyOpsVerify})
+
+	// The captured policy must still refuse an operation that was never granted.
+	_, err = key.Sign(jose.KeyOpsVerify, []byte("data"))
+	assert.ErrorIs(t, err, ErrInvalidOperations)
+
+	// And the granted operation must still work.
+	_, err = key.Sign(jose.KeyOpsSign, []byte("data"))
+	require.NoError(t, err)
+}
+
+// SigningKeyImpl read jwk.Alg() on every Sign, so relabelling the JWK after construction
+// changed the digest and signature scheme the key used (CWE-471).
+func TestSigningKeyCapturesAlgAtConstruction(t *testing.T) {
+	gen := &RsaSigningKeyGenerator{}
+	key, err := gen.Generate(jose.AlgRS256, 2048, []jose.KeyOps{jose.KeyOpsSign})
+	require.NoError(t, err)
+
+	jwk, err := key.Jwk()
+	require.NoError(t, err)
+	jwk.SetAlg(jose.AlgRS512)
+
+	assert.Equal(t, jose.AlgRS256, key.Algorithm(),
+		"algorithm must be fixed at construction, not read from the mutable JWK")
+}
+
+// AesGcmCryptor aliased the caller's operations slice, so mutating it after construction
+// changed the cryptor's authorization policy (CWE-471).
+func TestAesGcmCryptorCapturesOpsAtConstruction(t *testing.T) {
+	block, err := aes.NewCipher(make([]byte, 32))
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+
+	ops := []jose.KeyOps{jose.KeyOpsEncrypt}
+	cryptor, err := NewAesGcmCryptor(aead, rand.Reader, "kid", jose.AlgA256GCM, ops)
+	require.NoError(t, err)
+
+	// Mutate the caller-owned slice after construction.
+	ops[0] = jose.KeyOpsDecrypt
+
+	nonce := make([]byte, 12)
+
+	// The granted operation must still work.
+	_, _, err = cryptor.Seal(jose.KeyOpsEncrypt, nonce, []byte("plaintext"), nil)
+	require.NoError(t, err)
+
+	// The operation the caller tried to substitute must be refused.
+	_, _, err = cryptor.Seal(jose.KeyOpsDecrypt, nonce, []byte("plaintext"), nil)
+	assert.ErrorIs(t, err, ErrInvalidOperations)
+}
+
+// Key generators stored the caller's operations slice by reference, so a caller that
+// reused or mutated the slice changed the generated key's policy (CWE-471).
+func TestKeyGeneratorClonesOperations(t *testing.T) {
+	ops := []jose.KeyOps{jose.KeyOpsSign}
+	gen := &RsaSigningKeyGenerator{}
+	key, err := gen.Generate(jose.AlgRS256, 2048, ops)
+	require.NoError(t, err)
+
+	// Mutate the caller-owned slice after generation.
+	ops[0] = jose.KeyOpsVerify
+
+	// The key must still be scoped to sign.
+	_, err = key.Sign(jose.KeyOpsSign, []byte("data"))
+	require.NoError(t, err)
+	_, err = key.Sign(jose.KeyOpsVerify, []byte("data"))
+	assert.ErrorIs(t, err, ErrInvalidOperations)
+}
