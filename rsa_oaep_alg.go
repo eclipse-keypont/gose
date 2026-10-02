@@ -7,6 +7,9 @@ import (
 	"crypto"
 	// Link the digests advertised by oaepAlgToHash so that crypto.Hash.New never
 	// panics on an unavailable implementation.
+	// #nosec G505 -- RFC 7518 §4.3 defines "RSA-OAEP" as OAEP with SHA-1, so this
+	// blank import is required for interop; SHA-1's collision resistance is not
+	// relied upon in the OAEP construction (see .golangci.yml).
 	_ "crypto/sha1"
 	_ "crypto/sha256"
 

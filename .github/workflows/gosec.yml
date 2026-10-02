@@ -1,0 +1,40 @@
+name: Security Scan (gosec)
+
+# Runs gosec (https://github.com/securego/gosec) — a static-analysis security
+# scanner for Go code. Complements the govulncheck workflow (dependency CVEs) by
+# flagging insecure code patterns in this module itself. Runs on PRs and weekly
+# so newly added rules surface even without a code change.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: '27 6 * * 1'
+  workflow_dispatch:
+  # Allows the Release pipeline to gate a tag on a passing security scan.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
+
+      - name: Run gosec
+        run: gosec ./...

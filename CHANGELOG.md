@@ -135,8 +135,10 @@ second major version onward).
 ### CI/CD & supply chain
 
 - Unified security/quality pipeline shared across the pkcs11-go / crypto11 / gose projects:
-  CodeQL, govulncheck, Gitleaks secret scanning, OpenSSF Scorecard, dependency review, and
-  golangci-lint gate every push (replacing Travis CI).
+  CodeQL, govulncheck, OpenSSF Scorecard, dependency review, and golangci-lint gate every push
+  (replacing Travis CI).
+- Secret scanning is provided by GitHub native secret scanning and push protection rather than an
+  in-CI Gitleaks workflow — see [`.github/SECRET_SCANNING.md`](./.github/SECRET_SCANNING.md).
 - All third-party GitHub Actions pinned to commit SHAs.
 - Tagged releases now produce a signed, **SLSA level 3**-attested source archive
   (via [slsa-github-generator](https://github.com/slsa-framework/slsa-github-generator) and

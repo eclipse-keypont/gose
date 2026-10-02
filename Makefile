@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
 # SPDX-License-Identifier: MIT
 
-.PHONY: all build vet test lint lint-fix govulncheck coverage notices clean version release
+.PHONY: all build vet test lint lint-fix gosec govulncheck coverage notices clean version release
 
 SRCS := $(wildcard *.go) $(wildcard jose/*.go)
 
-all: clean build vet lint govulncheck coverage
+all: clean build vet lint gosec govulncheck coverage
 
 # ── Tool preconditions ───────────────────────────────────────────────────────
 # $(call require,<binary>,<how to install it>) — fail early with an install hint.
@@ -72,6 +72,19 @@ GOVULNCHECK ?= govulncheck
 govulncheck:
 	$(call require,$(GOVULNCHECK),go install golang.org/x/vuln/cmd/govulncheck@latest)
 	$(GOVULNCHECK) -show verbose ./...
+
+# ── Security scan ─────────────────────────────────────────────────────────────
+# Runs gosec (https://github.com/securego/gosec) — a static-analysis security
+# scanner for Go code. Complements govulncheck (dependency CVEs) by flagging
+# insecure code patterns in this module itself.
+#
+# Install gosec:
+#   go install github.com/securego/gosec/v2/cmd/gosec@latest
+GOSEC ?= gosec
+
+gosec:
+	$(call require,$(GOSEC),go install github.com/securego/gosec/v2/cmd/gosec@latest)
+	$(GOSEC) ./...
 
 ## Licenses
 # Generated via a temp file: redirecting straight into NOTICES.md truncates it

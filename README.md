@@ -4,7 +4,6 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/eclipse-keypont/gose.svg)](https://pkg.go.dev/github.com/eclipse-keypont/gose)
 [![Build](https://github.com/eclipse-keypont/gose/actions/workflows/ci.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/ci.yml)
 [![Lint](https://github.com/eclipse-keypont/gose/actions/workflows/lint.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/lint.yml)
-[![Secret Scan](https://github.com/eclipse-keypont/gose/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/secret-scan.yml)
 [![Release](https://github.com/eclipse-keypont/gose/actions/workflows/release.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/release.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/eclipse-keypont/gose/badge)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keypont/gose)
 [![GitHub release](https://img.shields.io/github/v/release/eclipse-keypont/gose)](https://github.com/eclipse-keypont/gose/releases/latest)
@@ -16,8 +15,9 @@ GOSE is JOSE/JWT/JWK/JWS/JWKS implemented in Go with Helpers, and examples.
 
 It contains implementations of the JOSE suite of types and helpers for many different use cases.
 
-This repository is built with a hardened GitHub Actions pipeline: golangci-lint, govulncheck, CodeQL, secret
-scanning, dependency review, and an OpenSSF Scorecard rating gate every push, and tagged releases are signed
+This repository is built with a hardened GitHub Actions pipeline: golangci-lint, govulncheck, CodeQL, dependency
+review, and an OpenSSF Scorecard rating gate every push, while GitHub native secret scanning and push protection
+guard every push and pull request. Tagged releases are signed
 and SLSA3-attested rather than just pushed — see [Releases & verification](#releases--verification) below for
 what ships and how to check it.
 
