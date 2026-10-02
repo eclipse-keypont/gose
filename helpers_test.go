@@ -4,13 +4,16 @@
 package gose
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"math/big"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -379,4 +382,64 @@ func TestGetALFromAAD(t *testing.T) {
 	res := GetALFromAAD(aad)
 	test := fmt.Sprintf("%v", res)
 	assert.Equal(t, exp, test)
+}
+
+// TestLoadJwk_RequiredOpsEnforced pins the fail-open fix: LoadJwk evaluated the
+// required key_ops but then returned the key with a nil error, so callers that
+// passed `required` got no protection at all.
+func TestLoadJwk_RequiredOpsEnforced(t *testing.T) {
+	k := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, 32))
+	doc := fmt.Sprintf(`{"kty":"oct","kid":"k1","alg":"A256GCM","key_ops":["encrypt"],"k":%q}`, k)
+
+	jwk, err := LoadJwk(strings.NewReader(doc), []jose.KeyOps{jose.KeyOpsDecrypt})
+	require.ErrorIs(t, err, ErrInvalidOperations)
+	require.Nil(t, jwk)
+
+	jwk, err = LoadJwk(strings.NewReader(doc), []jose.KeyOps{jose.KeyOpsEncrypt})
+	require.NoError(t, err)
+	require.Equal(t, "k1", jwk.Kid())
+
+	// No requirement, no check — unchanged behaviour.
+	jwk, err = LoadJwk(strings.NewReader(doc), nil)
+	require.NoError(t, err)
+	require.NotNil(t, jwk)
+}
+
+// TestLoadPrivateKey_RejectsDegenerateRsaPrimes pins the panic fix. Each of these
+// documents used to reach rsa.PrivateKey.Precompute / the CRT comparison with a
+// prime of 0, 1, or nil and crash with a nil-pointer dereference; every one must
+// now come back as ErrInconsistentKeyValues.
+func TestLoadPrivateKey_RejectsDegenerateRsaPrimes(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	b := func(x *big.Int) string { return base64.RawURLEncoding.EncodeToString(x.Bytes()) }
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	base := fmt.Sprintf(`"kty":"RSA","alg":"RS256","key_ops":["sign"],"n":%q,"e":"AQAB","d":%q`, b(key.N), b(key.D))
+	cases := map[string]string{
+		"p=q=1":       `{` + base + `,"p":"AQ","q":"AQ","dp":"AQ","dq":"AQ","qi":"AQ"}`,
+		"p=q=0":       `{` + base + `,"p":"AA","q":"AA","dp":"AA","dq":"AA","qi":"AA"}`,
+		"crt absent":  `{` + base + `}`,
+		"crt partial": `{` + base + fmt.Sprintf(`,"p":%q}`, b(key.Primes[0])),
+		"primes of another key": `{` + base + fmt.Sprintf(`,"p":%q,"q":%q,"dp":%q,"dq":%q,"qi":%q}`,
+			b(other.Primes[0]), b(other.Primes[1]), b(other.Precomputed.Dp), b(other.Precomputed.Dq), b(other.Precomputed.Qinv)),
+	}
+	for name, doc := range cases {
+		t.Run(name, func(t *testing.T) {
+			jwk, err := jose.UnmarshalJwk(strings.NewReader(doc))
+			require.NoError(t, err, "the JWK itself is well formed; the defect is in the key material")
+			require.NotPanics(t, func() {
+				_, err = LoadPrivateKey(jwk, nil)
+			})
+			require.ErrorIs(t, err, ErrInconsistentKeyValues)
+		})
+	}
+
+	// And the genuine key still loads.
+	good, err := JwkFromPrivateKey(key, []jose.KeyOps{jose.KeyOpsSign}, nil)
+	require.NoError(t, err)
+	signer, err := LoadPrivateKey(good, nil)
+	require.NoError(t, err)
+	require.True(t, key.PublicKey.Equal(signer.Public()))
 }

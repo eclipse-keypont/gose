@@ -68,7 +68,15 @@ func (cryptor *AesCbcCryptor) Seal(plaintext []byte) []byte {
 }
 
 // Open decrypts the given ciphertext returning the plaintext.
+//
+// The ciphertext must be a whole number of blocks; cipher.BlockMode.CryptBlocks panics
+// otherwise, and this interface has no error return, so a misaligned input yields nil.
+// Callers decrypting a JWE never reach this: JweDirectDecryptorBlock verifies the tag
+// and checks the alignment first.
 func (cryptor *AesCbcCryptor) Open(ciphertext []byte) []byte {
+	if len(ciphertext)%cryptor.blockCipher.BlockSize() != 0 {
+		return nil
+	}
 	dstSize := getDestinationSize(len(ciphertext), cryptor.blockCipher.BlockSize())
 	dst := make([]byte, dstSize)
 	cryptor.blockCipher.CryptBlocks(dst, ciphertext)

@@ -4,6 +4,7 @@
 package jose
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -315,4 +316,44 @@ func TestJwtClaims_UnmarshalCustomClaim(t *testing.T) {
 	err = claims.UnmarshalCustomClaim("name", &intName)
 	require.NoError(t, err)
 	assert.Equal(t, 1, intName)
+}
+
+// TestJwt_Unmarshal_ResetsPreviousToken pins the struct-reuse fix. JwtClaims.UnmarshalJSON
+// assigns only the members present in the token, so a Jwt that had parsed a token with
+// "iss", "sub" and "aud" and was then reused for a token carrying only "exp" kept all
+// three — an audience check on the second token passed on the first token's audience.
+// Unmarshal must leave nothing of the previous token behind, header included.
+func TestJwt_Unmarshal_ResetsPreviousToken(t *testing.T) {
+	compact := func(header, claims string) string {
+		return fmt.Sprintf("%s.%s.%s",
+			base64.RawURLEncoding.EncodeToString([]byte(header)),
+			base64.RawURLEncoding.EncodeToString([]byte(claims)),
+			base64.RawURLEncoding.EncodeToString([]byte("sig")))
+	}
+	first := compact(`{"alg":"RS256","kid":"key-1","typ":"JWT"}`,
+		`{"iss":"issuer-1","sub":"alice","aud":["aud-1"],"jti":"id-1","nbf":10,"exp":9999999999,"extra":"x"}`)
+	second := compact(`{"alg":"ES256","typ":"JWT"}`, `{"exp":9999999999}`)
+
+	var jwt Jwt
+	_, err := jwt.Unmarshal(first)
+	require.NoError(t, err)
+	require.Equal(t, "issuer-1", jwt.Claims.Issuer)
+	require.Equal(t, []string{"aud-1"}, jwt.Claims.Audiences.Aud)
+
+	_, err = jwt.Unmarshal(second)
+	require.NoError(t, err)
+
+	var fresh Jwt
+	_, err = fresh.Unmarshal(second)
+	require.NoError(t, err)
+	// Everything the second token does not carry must be gone, header and claims alike.
+	require.Equal(t, fresh, jwt, "a reused Jwt must equal a fresh one after Unmarshal")
+	require.Empty(t, jwt.Claims.Issuer)
+	require.Empty(t, jwt.Claims.Subject)
+	require.Empty(t, jwt.Claims.Audiences.Aud)
+	require.Empty(t, jwt.Claims.JwtID)
+	require.Zero(t, jwt.Claims.NotBefore)
+	require.Empty(t, jwt.Claims.UntypedClaims)
+	require.Empty(t, jwt.Header.Kid)
+	require.Equal(t, AlgES256, jwt.Header.Alg)
 }

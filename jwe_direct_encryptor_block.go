@@ -20,6 +20,13 @@ var (
 
 // JweDirectEncryptorBlock is an implementation of the JweDirectEncryptionEncryptor interface for BlockMode which is
 // more efficient than Block for bulk operations.
+//
+// The IV is fixed for the encryptor's lifetime: cipher.BlockMode carries its own chaining
+// state and offers no way to start a new message, so Encrypt emits the IV it was built
+// with. Build one encryptor per message, with a fresh random IV and a BlockMode created
+// from that IV, as k8s-kms-plugin does. Encrypting several messages through one instance
+// reuses the IV under CBC and produces JWEs whose declared IV does not match the chaining
+// state they were actually encrypted with.
 type JweDirectEncryptorBlock struct {
 	aesKey      BlockEncryptionKey
 	iv          []byte

@@ -217,3 +217,68 @@ func TestJweRsaKeyOAEPEncryptionDecryption(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, input, pt)
 }
+
+// TestJweRsaKeyEncryptionDecryptorImpl_Decrypt_CekFailuresIndistinguishable pins the
+// RFC 7516 §11.5 behaviour. Three JWEs that fail for different reasons — a corrupted
+// wrapped CEK (OAEP rejects it), a CEK of the wrong length for the advertised "enc"
+// (a genuine 16-byte key under A256GCM), and a corrupted authentication tag — must
+// come back with the same error, so that a caller relaying errors to the sender does
+// not leak which layer failed. Before the fix the first case returned the RSA error
+// straight away and the second was accepted as AES-128.
+func TestJweRsaKeyEncryptionDecryptorImpl_Decrypt_CekFailuresIndistinguishable(t *testing.T) {
+	generator := &RsaKeyDecryptionKeyGenerator{}
+	decryptionKey, err := generator.Generate(jose.AlgRSAOAEP, 2048, []jose.KeyOps{jose.KeyOpsDecrypt})
+	require.NoError(t, err)
+	encryptionKey, err := decryptionKey.Encryptor()
+	require.NoError(t, err)
+	publicJwk, err := encryptionKey.Jwk()
+	require.NoError(t, err)
+	encryptor, err := NewJweRsaKeyEncryptionEncryptorImpl(publicJwk, rand.Reader)
+	require.NoError(t, err)
+	store, err := NewAsymmetricDecryptionKeyStoreImpl(map[string]AsymmetricDecryptionKey{decryptionKey.Kid(): decryptionKey})
+	require.NoError(t, err)
+	decryptor := NewJweRsaKeyEncryptionDecryptorImpl(store)
+
+	good, err := encryptor.Encrypt([]byte("payload"), crypto.SHA256)
+	require.NoError(t, err)
+	var parsed jose.JweRfc7516Compact
+	require.NoError(t, parsed.Unmarshal(good))
+
+	mutate := func(f func(j *jose.JweRfc7516Compact)) string {
+		j := parsed
+		j.EncryptedKey = bytes.Clone(parsed.EncryptedKey)
+		j.AuthenticationTag = bytes.Clone(parsed.AuthenticationTag)
+		f(&j)
+		out, err := j.Marshal()
+		require.NoError(t, err)
+		return out
+	}
+
+	// The recipient's public key is all an attacker needs to wrap a CEK of their choosing.
+	pub, ok := decryptionKey.(*RsaPrivateKeyImpl).key.Public().(*rsa.PublicKey)
+	require.True(t, ok)
+	shortCek := make([]byte, 16)
+	wrappedShortCek, err := rsa.EncryptOAEP(crypto.SHA256.New(), rand.Reader, pub, shortCek, nil)
+	require.NoError(t, err)
+
+	cases := map[string]string{
+		"corrupted wrapped CEK": mutate(func(j *jose.JweRfc7516Compact) { j.EncryptedKey[0] ^= 0x01 }),
+		"wrong-length CEK":      mutate(func(j *jose.JweRfc7516Compact) { j.EncryptedKey = wrappedShortCek }),
+		"corrupted tag":         mutate(func(j *jose.JweRfc7516Compact) { j.AuthenticationTag[0] ^= 0x01 }),
+	}
+	errs := map[string]string{}
+	for name, jwe := range cases {
+		pt, _, err := decryptor.Decrypt(jwe, crypto.Hash(0))
+		require.Error(t, err, name)
+		require.Nil(t, pt, name)
+		errs[name] = err.Error()
+	}
+	require.Equal(t, errs["corrupted tag"], errs["corrupted wrapped CEK"], "an OAEP failure must look like a tag failure")
+	require.Equal(t, errs["corrupted tag"], errs["wrong-length CEK"], "a wrong-length CEK must look like a tag failure")
+	require.NotContains(t, errs["corrupted wrapped CEK"], "rsa", "the RSA layer's error must not surface")
+
+	// The untouched JWE still decrypts.
+	pt, _, err := decryptor.Decrypt(good, crypto.Hash(0))
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), pt)
+}

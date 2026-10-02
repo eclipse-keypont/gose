@@ -4,6 +4,7 @@
 package gose
 
 import (
+	"crypto/aes"
 	"encoding/binary"
 	"fmt"
 
@@ -53,7 +54,14 @@ func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plainte
 		err = ErrZipCompressionNotSupported
 		return
 	}
+	// The tag has verified, so a misaligned ciphertext here means a faulty producer, not
+	// an attacker — but cipher.BlockMode.CryptBlocks panics on it rather than erroring.
+	if len(jwe.Ciphertext)%aes.BlockSize != 0 {
+		return nil, nil, fmt.Errorf("error decrypting: ciphertext length %d is not a multiple of the AES block size", len(jwe.Ciphertext))
+	}
 	plaintextBlock := decryptor.aesKey.Open(jwe.Ciphertext)
+	// The padded plaintext must not linger once the caller's copy is made.
+	defer clear(plaintextBlock)
 
 	// get the size of the final plaintext
 	//input, err := jwe.ProtectedHeader.OtherAad.MarshalJSON()

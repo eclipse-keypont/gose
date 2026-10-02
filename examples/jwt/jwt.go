@@ -37,16 +37,9 @@ func main() {
 		fail(err)
 	}
 
-	// Create a private key JWK and marshal to a string.
-	jwk, err := signingKey.Jwk()
-	if err != nil {
-		fail(err)
-	}
-	marshalled, err := gose.JwkToString(jwk)
-	if err != nil {
-		fail(err)
-	}
-	fmt.Printf("Created signing key JWK: %s\n", marshalled)
+	// The signing key is private material: report its identifier, never the JWK
+	// itself. (Its public half is printed below, where the verifier is set up.)
+	fmt.Printf("Created signing key with kid %s\n", signingKey.Kid())
 
 	// Create a JWT signer specifying the issuer string and our previously generated signing key
 	jwtSigner := gose.NewJwtSigner("issuer", signingKey)
@@ -76,11 +69,11 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	jwk, err = verificationKey.Jwk()
+	jwk, err := verificationKey.Jwk()
 	if err != nil {
 		fail(err)
 	}
-	marshalled, err = gose.JwkToString(jwk)
+	marshalled, err := gose.JwkToString(jwk)
 	if err != nil {
 		fail(err)
 	}

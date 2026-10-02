@@ -5,11 +5,14 @@ package jose
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"math/big"
 )
 
 // Certificate leaf for JWK
@@ -194,6 +197,57 @@ func (j *jwkFields) CheckConsistency() error {
 	return nil
 }
 
+// x5cLeaf returns the first "x5c" certificate, or nil when the JWK carries none.
+func (j *jwkFields) x5cLeaf() (*x509.Certificate, error) {
+	if len(j.KeyX5C) == 0 {
+		return nil, nil
+	}
+	leaf := j.KeyX5C[0].Certificate
+	if leaf == nil {
+		return nil, ErrJwkInconsistentCertificateFields
+	}
+	return leaf, nil
+}
+
+// checkX5CMatchesKey enforces RFC 7517 §4.7: when "x5c" is present, the key in its first
+// certificate MUST match the public key the other JWK members represent. CheckConsistency
+// only ties "x5t" to that certificate, so without this a JWK could carry a certificate
+// issued for some other key and anything trusting Certificates() would vouch for a key
+// the chain never certified.
+func (k *PublicRsaKey) checkX5CMatchesKey() error {
+	leaf, err := k.x5cLeaf()
+	if leaf == nil {
+		return err
+	}
+	certPub, ok := leaf.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return ErrJwkCertificateKeyMismatch
+	}
+	// Compare as big.Int: E has not yet been bounded to a Go int at this point.
+	if certPub.N.Cmp(k.N.Int()) != 0 || big.NewInt(int64(certPub.E)).Cmp(k.E.Int()) != 0 {
+		return ErrJwkCertificateKeyMismatch
+	}
+	return nil
+}
+
+// checkX5CMatchesKey is the EC counterpart of PublicRsaKey.checkX5CMatchesKey.
+func (k *PublicEcKey) checkX5CMatchesKey() error {
+	leaf, err := k.x5cLeaf()
+	if leaf == nil {
+		return err
+	}
+	certPub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok || certPub.X.Cmp(k.X.Int()) != 0 || certPub.Y.Cmp(k.Y.Int()) != 0 {
+		return ErrJwkCertificateKeyMismatch
+	}
+	// "crv" is optional in gose (the curve is normally taken from "alg"), but when it is
+	// present it must name the certificate's curve.
+	if k.Crv != "" && Crv(certPub.Curve.Params().Name) != k.Crv {
+		return ErrJwkCertificateKeyMismatch
+	}
+	return nil
+}
+
 // PublicRsaKeyFields Public RSA specific fields.
 type PublicRsaKeyFields struct {
 	N BigNum `json:"n"`
@@ -244,7 +298,10 @@ func (k *PublicRsaKey) UnmarshalJSON(src []byte) (err error) {
 		err = ErrUnexpectedKeyType
 		return
 	}
-	err = k.CheckConsistency()
+	if err = k.CheckConsistency(); err != nil {
+		return
+	}
+	err = k.checkX5CMatchesKey()
 	return
 }
 
@@ -306,7 +363,10 @@ func (k *PrivateRsaKey) UnmarshalJSON(src []byte) (err error) {
 		err = ErrUnexpectedKeyType
 		return
 	}
-	err = k.CheckConsistency()
+	if err = k.CheckConsistency(); err != nil {
+		return
+	}
+	err = k.checkX5CMatchesKey()
 	return
 }
 
@@ -361,7 +421,10 @@ func (k *PublicEcKey) UnmarshalJSON(src []byte) (err error) {
 		err = ErrUnexpectedKeyType
 		return
 	}
-	err = k.CheckConsistency()
+	if err = k.CheckConsistency(); err != nil {
+		return
+	}
+	err = k.checkX5CMatchesKey()
 	return
 }
 
@@ -418,7 +481,10 @@ func (k *PrivateEcKey) UnmarshalJSON(src []byte) (err error) {
 		err = ErrUnexpectedKeyType
 		return
 	}
-	err = k.CheckConsistency()
+	if err = k.CheckConsistency(); err != nil {
+		return
+	}
+	err = k.checkX5CMatchesKey()
 	return
 }
 
@@ -477,21 +543,26 @@ func (k *OctSecretKey) UnmarshalJSON(src []byte) (err error) {
 
 // UnmarshalJwk serialization into a concrete type.
 func UnmarshalJwk(reader io.ReadSeeker) (jwk Jwk, err error) {
+	// Read the document once and unmarshal from the bytes. The previous version reused a
+	// single json.Decoder across a Seek back to the start: the decoder keeps its own read
+	// buffer, so a stream holding two JSON objects dispatched on the first object's "kty"
+	// and then decoded the *second* object. json.Unmarshal also rejects anything after the
+	// first value, which a JWK never legitimately has.
+	var src []byte
+	if src, err = io.ReadAll(reader); err != nil {
+		return
+	}
 	// First unmarshal Kty so that we can work out how to proceed.
-	decoder := json.NewDecoder(reader)
 	keyType := struct {
 		Kty Kty `json:"kty"`
 	}{}
-	if err = decoder.Decode(&keyType); err != nil {
-		return
-	}
-	if _, err = reader.Seek(0, io.SeekStart); err != nil {
+	if err = json.Unmarshal(src, &keyType); err != nil {
 		return
 	}
 	switch keyType.Kty {
 	case KtyRSA:
 		var rsa PrivateRsaKey
-		if err = decoder.Decode(&rsa); err != nil {
+		if err = json.Unmarshal(src, &rsa); err != nil {
 			return
 		}
 		// Look at D to assert whether this is a private or public RSA key.
@@ -503,7 +574,7 @@ func UnmarshalJwk(reader io.ReadSeeker) (jwk Jwk, err error) {
 		return
 	case KtyEC:
 		var ec PrivateEcKey
-		if err = decoder.Decode(&ec); err != nil {
+		if err = json.Unmarshal(src, &ec); err != nil {
 			return
 		}
 		if ec.D.Int().BitLen() == 0 {
@@ -514,7 +585,7 @@ func UnmarshalJwk(reader io.ReadSeeker) (jwk Jwk, err error) {
 		return
 	case KtyOct:
 		var oct OctSecretKey
-		if err = decoder.Decode(&oct); err != nil {
+		if err = json.Unmarshal(src, &oct); err != nil {
 			return
 		}
 		jwk = &oct

@@ -76,14 +76,19 @@ func (rsaKey *RsaPrivateKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byt
 	if !isSubset(ops, []jose.KeyOps{requested}) {
 		return nil, ErrInvalidOperations
 	}
+	// A decryption key is labelled RSA-OAEP, which has no signing options: refuse
+	// rather than dereference a nil entry.
+	opts, err := signerOptsForAlg(rsaKey.jwk.Alg())
+	if err != nil {
+		return nil, err
+	}
 	/* Calculate digest. */
-	digester := algToOptsMap[rsaKey.jwk.Alg()].HashFunc().New()
+	digester := opts.HashFunc().New()
 	if _, err := digester.Write(data); err != nil {
 		slog.Error("hash write error", "err", err)
 		return nil, err
 	}
 	digest := digester.Sum(nil)
-	opts := algToOptsMap[rsaKey.jwk.Alg()]
 	return rsaKey.key.Sign(rand.Reader, digest, opts)
 }
 

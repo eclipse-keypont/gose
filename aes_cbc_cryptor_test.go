@@ -83,13 +83,17 @@ func testSeal(t *testing.T, cryptor BlockEncryptionKey) {
 }
 
 func testOpen(t *testing.T, cryptor BlockEncryptionKey) {
-	small := []byte("ping")
+	// A ciphertext that is not a whole number of blocks cannot be decrypted: the real
+	// cipher.BlockMode panics on it, so Open reports nil instead of crashing.
+	require.Nil(t, cryptor.Open([]byte("ping")))
+
+	small := []byte("pingpingpingping") // exactly one block
 	cSmall := cryptor.Open(small)
 	require.Equal(t, 0, len(cSmall)%16)
 	require.NotEqual(t, small, cSmall)
 	require.Contains(t, string(cSmall), mockExpectedCleartext)
 
-	big := []byte("pingpingpingpingpingpingpingpingpingping")
+	big := []byte("pingpingpingpingpingpingpingpingpingpingpingpingpingpingpingping") // four blocks
 	cBig := cryptor.Open(big)
 	require.Equal(t, 0, len(cBig)%16)
 	require.NotEqual(t, big, cBig)
