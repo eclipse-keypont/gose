@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -25,7 +7,7 @@ import (
 	"crypto/x509"
 	"math"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 var (
@@ -34,7 +16,7 @@ var (
 	}
 )
 
-//NewVerificationKey for jwk or error
+// NewVerificationKey for jwk or error
 func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 	/* Check jwk can be used to verify */
 	ops := validVerificationOps
@@ -80,7 +62,7 @@ func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 		}
 		return nil, ErrUnsupportedKeyType
 	case *jose.PublicEcKey:
-		if !(jwk.Alg() == jose.AlgES256 || jwk.Alg() == jose.AlgES384 || jwk.Alg() == jose.AlgES512) {
+		if jwk.Alg() != jose.AlgES256 && jwk.Alg() != jose.AlgES384 && jwk.Alg() != jose.AlgES512 {
 			return nil, ErrUnsupportedKeyType
 		}
 		var result ECVerificationKeyImpl
@@ -90,7 +72,9 @@ func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 		result.jwk = jwk
 
 		return &result, nil
-		// TODO: add symmetric verification.
+		// Symmetric (oct) key verification is not supported: the VerificationKey interface
+		// requires Certificates() and MarshalPem(), which have no meaningful implementation
+		// for symmetric keys. Add a dedicated symmetric-verification interface if needed.
 	default:
 		return nil, ErrUnsupportedKeyType
 	}

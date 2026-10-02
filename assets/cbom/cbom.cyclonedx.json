@@ -392,6 +392,34 @@
         },
         "oid": "1.2.840.113549.1.1.7"
       }
+    },
+    {
+      "bom-ref": "RSA-OAEP-256",
+      "type": "cryptographic-asset",
+      "name": "RSA/ECB/OAEPWithSHA-256AndMGF1Padding",
+      "description": "RSAES OAEP using SHA-256 and MGF1 with SHA-256",
+      "externalReferences": [
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc7518.html#section-4.3",
+          "comment": "[RFC7518, Section 4.3]",
+          "type": "website"
+        },
+        {
+          "url": "http://www.w3.org/2009/xmlenc11#rsa-oaep",
+          "comment": "JOSE XML",
+          "type": "website"
+        }
+      ],
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "mode": "unknown",
+          "classicalSecurityLevel": 0,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.7"
+      }
     }
   ]
 }

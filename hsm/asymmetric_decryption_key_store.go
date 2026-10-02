@@ -1,8 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
+
 package hsm
 
 import (
-	"github.com/ThalesGroup/crypto11"
-	"github.com/ThalesGroup/gose"
+	"github.com/eclipse-keypont/crypto11/v2"
+
+	"github.com/eclipse-keypont/gose"
 )
 
 // AsymmetricDecryptionKeyStore implements the AsymmetricDecryptionKeyStore interface providing key lookup
@@ -29,7 +33,7 @@ func (a *AsymmetricDecryptionKeyStore) Get(kid string) (k gose.AsymmetricDecrypt
 
 // NewAsymmetricDecryptionKeyStore creates an instance of AsymmetricDecryptionKeyStore.
 func NewAsymmetricDecryptionKeyStore(ctx *crypto11.Context) *AsymmetricDecryptionKeyStore {
-	return &AsymmetricDecryptionKeyStore {
+	return &AsymmetricDecryptionKeyStore{
 		ctx: ctx,
 	}
 }

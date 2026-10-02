@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -26,7 +8,7 @@ import (
 	"crypto/rand"
 	"io"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 var validEncryptionOpts = []jose.KeyOps{jose.KeyOpsEncrypt}
@@ -55,7 +37,7 @@ func (cryptor *AesGcmCryptor) Algorithm() jose.Alg {
 // GenerateNonce generate a nonce of the correct size for use with GCM encryption/decryption from a random source.
 func (cryptor *AesGcmCryptor) GenerateNonce() ([]byte, error) {
 	nonce := make([]byte, cryptor.aead.NonceSize())
-	if _, err := cryptor.rng.Read(nonce); err != nil {
+	if _, err := io.ReadFull(cryptor.rng, nonce); err != nil {
 		return nil, err
 	}
 	return nonce, nil
@@ -66,6 +48,18 @@ func (cryptor *AesGcmCryptor) Open(operation jose.KeyOps, nonce, ciphertext, aad
 	ops := intersection(validDecryptionOpts, cryptor.opts)
 	if !isSubset(ops, []jose.KeyOps{operation}) {
 		err = ErrInvalidOperations
+		return
+	}
+	// The nonce comes straight off the wire on the decryption path. cipher.AEAD.Open
+	// panics rather than erroring on a wrong-sized nonce, so check it here as Seal does.
+	if len(nonce) != cryptor.aead.NonceSize() {
+		err = ErrInvalidNonce
+		return
+	}
+	// Likewise the tag: a wrong-sized tag cannot authenticate, and rejecting it here
+	// gives the caller a precise error instead of an opaque authentication failure.
+	if len(tag) != cryptor.aead.Overhead() {
+		err = ErrInvalidAuthenticationTag
 		return
 	}
 	dst := make([]byte, 0, len(ciphertext))

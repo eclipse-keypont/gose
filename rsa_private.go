@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -30,13 +12,13 @@ import (
 	"encoding/pem"
 	"log/slog"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 // RsaPrivateKeyImpl provides software based signing and decryption capabilities for use during JWT and JWE processing.
 type RsaPrivateKeyImpl struct {
-	jwk   jose.Jwk
-	key   *rsa.PrivateKey
+	jwk jose.Jwk
+	key *rsa.PrivateKey
 }
 
 // Key returns the underlying crypto.Signer implementation.
@@ -44,33 +26,33 @@ func (rsaKey *RsaPrivateKeyImpl) Key() crypto.Signer {
 	return rsaKey.key
 }
 
-//Operations returns the allowed operations for the SigningKey
+// Operations returns the allowed operations for the SigningKey
 func (rsaKey *RsaPrivateKeyImpl) Operations() []jose.KeyOps {
 	return rsaKey.jwk.Ops()
 }
 
-//Kid returns the jwk id
+// Kid returns the jwk id
 func (rsaKey *RsaPrivateKeyImpl) Kid() string {
 	/* JIT jwk load. */
 	return rsaKey.jwk.Kid()
 }
 
-//Jwk returns the JWK
+// Jwk returns the JWK
 func (rsaKey *RsaPrivateKeyImpl) Jwk() (jose.Jwk, error) {
 	return rsaKey.jwk, nil
 }
 
-//Algorithm returns the Algorithm
+// Algorithm returns the Algorithm
 func (rsaKey *RsaPrivateKeyImpl) Algorithm() jose.Alg {
 	return rsaKey.jwk.Alg()
 }
 
-//Marshal marshal the key to a JWK string, or error
+// Marshal marshal the key to a JWK string, or error
 func (rsaKey *RsaPrivateKeyImpl) Marshal() (string, error) {
 	return JwkToString(rsaKey.jwk)
 }
 
-//MarshalPem marshal the key to a PEM string, or error
+// MarshalPem marshal the key to a PEM string, or error
 func (rsaKey *RsaPrivateKeyImpl) MarshalPem() (string, error) {
 	var pemType string
 	var derEncoded []byte
@@ -84,10 +66,10 @@ func (rsaKey *RsaPrivateKeyImpl) MarshalPem() (string, error) {
 	if err := pem.Encode(&output, &block); err != nil {
 		return "", err
 	}
-	return string(output.Bytes()), nil
+	return output.String(), nil
 }
 
-//Sign perform signing operations on data, or error
+// Sign perform signing operations on data, or error
 func (rsaKey *RsaPrivateKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, error) {
 	/* Verify the operation being requested is supported by the jwk. */
 	ops := intersection(validSignerOps, rsaKey.jwk.Ops())
@@ -105,7 +87,7 @@ func (rsaKey *RsaPrivateKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byt
 	return rsaKey.key.Sign(rand.Reader, digest, opts)
 }
 
-//Certificates of signing key
+// Certificates of signing key
 func (rsaKey *RsaPrivateKeyImpl) Certificates() []*x509.Certificate {
 	return rsaKey.jwk.X5C()
 }
@@ -131,12 +113,12 @@ func (rsaKey *RsaPrivateKeyImpl) publicKey() (*RsaPublicKeyImpl, error) {
 	}, nil
 }
 
-//Verifier verification key for signing jwk
+// Verifier verification key for signing jwk
 func (rsaKey *RsaPrivateKeyImpl) Verifier() (VerificationKey, error) {
 	return rsaKey.publicKey()
 }
 
-//Encryptor get encryption key
+// Encryptor get encryption key
 func (rsaKey *RsaPrivateKeyImpl) Encryptor() (AsymmetricEncryptionKey, error) {
 	return rsaKey.publicKey()
 }
@@ -156,4 +138,3 @@ func NewRsaDecryptionKey(jwk jose.Jwk) (*RsaPrivateKeyImpl, error) {
 		key: rsaKey,
 	}, nil
 }
-

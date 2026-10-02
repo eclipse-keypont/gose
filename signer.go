@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -32,17 +14,18 @@ import (
 
 	"log/slog"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
-//SigningKeyImpl implements a RSA signing key
+// SigningKeyImpl implements a RSA signing key
 type SigningKeyImpl struct {
 	jwk   jose.Jwk
 	key   crypto.Signer
 	certs []*x509.Certificate
 }
 
-/* Alg to digest map. */
+// algToOptsMap maps each supported signing algorithm to its crypto.SignerOpts.
+// Initialized once at package startup — treat as read-only; mutating it is a data race.
 var algToOptsMap = map[jose.Alg]crypto.SignerOpts{
 	jose.AlgPS256: &rsa.PSSOptions{SaltLength: 32, Hash: crypto.SHA256},
 	jose.AlgPS384: &rsa.PSSOptions{SaltLength: 48, Hash: crypto.SHA384},
@@ -69,7 +52,7 @@ var validDecryptionOps = []jose.KeyOps{
 
 const rsaPrivateKeyPemType = "RSA PRIVATE KEY"
 
-//NewSigningKey returns a SignignKey for a jose.JWK with required jwk operations
+// NewSigningKey returns a SignignKey for a jose.JWK with required jwk operations
 func NewSigningKey(jwk jose.Jwk, required []jose.KeyOps) (SigningKey, error) {
 	/* Check jwk can be used to sign */
 	ops := intersection(validSignerOps, jwk.Ops())
@@ -92,38 +75,38 @@ func NewSigningKey(jwk jose.Jwk, required []jose.KeyOps) (SigningKey, error) {
 	}
 }
 
-//Key returns the crypto.Signer
+// Key returns the crypto.Signer
 func (signer *SigningKeyImpl) Key() crypto.Signer {
 	return signer.key
 }
 
-//Operations returns the allowed operations for the SigningKey
+// Operations returns the allowed operations for the SigningKey
 func (signer *SigningKeyImpl) Operations() []jose.KeyOps {
 	return signer.jwk.Ops()
 }
 
-//Kid returns the jwk id
+// Kid returns the jwk id
 func (signer *SigningKeyImpl) Kid() string {
 	/* JIT jwk load. */
 	return signer.jwk.Kid()
 }
 
-//Jwk returns the JWK
+// Jwk returns the JWK
 func (signer *SigningKeyImpl) Jwk() (jose.Jwk, error) {
 	return signer.jwk, nil
 }
 
-//Algorithm returns the Algorithm
+// Algorithm returns the Algorithm
 func (signer *SigningKeyImpl) Algorithm() jose.Alg {
 	return signer.jwk.Alg()
 }
 
-//Marshal marshal the key to a JWK string, or error
+// Marshal marshal the key to a JWK string, or error
 func (signer *SigningKeyImpl) Marshal() (string, error) {
 	return JwkToString(signer.jwk)
 }
 
-//MarshalPem marshal the key to a PEM string, or error
+// MarshalPem marshal the key to a PEM string, or error
 func (signer *SigningKeyImpl) MarshalPem() (string, error) {
 	var pemType string
 	var derEncoded []byte
@@ -142,10 +125,10 @@ func (signer *SigningKeyImpl) MarshalPem() (string, error) {
 	if err := pem.Encode(&output, &block); err != nil {
 		return "", err
 	}
-	return string(output.Bytes()), nil
+	return output.String(), nil
 }
 
-//Sign perform signing operations on data, or error
+// Sign perform signing operations on data, or error
 func (signer *SigningKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, error) {
 	/* Verify the operation being requested is supported by the jwk. */
 	ops := intersection(validSignerOps, signer.jwk.Ops())
@@ -163,12 +146,12 @@ func (signer *SigningKeyImpl) Sign(requested jose.KeyOps, data []byte) ([]byte, 
 	return signer.key.Sign(rand.Reader, digest, opts)
 }
 
-//Certificates of signing key
+// Certificates of signing key
 func (signer *SigningKeyImpl) Certificates() []*x509.Certificate {
 	return signer.certs
 }
 
-//Verifier verification key for signing jwk
+// Verifier verification key for signing jwk
 func (signer *SigningKeyImpl) Verifier() (VerificationKey, error) {
 	publicJwk, err := PublicFromPrivate(signer.jwk)
 	if err != nil {

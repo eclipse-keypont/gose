@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -30,10 +12,10 @@ import (
 	"encoding/pem"
 	"log/slog"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
-//RsaPublicKeyImpl implements RSA verification and encryption APIs
+// RsaPublicKeyImpl implements RSA verification and encryption APIs
 type RsaPublicKeyImpl struct {
 	key rsa.PublicKey
 	jwk jose.Jwk
@@ -49,17 +31,17 @@ var (
 	}
 )
 
-//Kid returns the key's id
+// Kid returns the key's id
 func (k *RsaPublicKeyImpl) Kid() string {
 	return k.jwk.Kid()
 }
 
-//Algorithm returns algorithm
+// Algorithm returns algorithm
 func (k *RsaPublicKeyImpl) Algorithm() jose.Alg {
 	return k.jwk.Alg()
 }
 
-//Jwk returns the public JWK
+// Jwk returns the public JWK
 func (k *RsaPublicKeyImpl) Jwk() (jose.Jwk, error) {
 	jwk, err := JwkFromPublicKey(&k.key, k.jwk.Ops(), k.jwk.X5C())
 	if err != nil {
@@ -69,7 +51,7 @@ func (k *RsaPublicKeyImpl) Jwk() (jose.Jwk, error) {
 	return jwk, nil
 }
 
-//Marshal returns the key marshalled to a JWK string, or error
+// Marshal returns the key marshalled to a JWK string, or error
 func (k *RsaPublicKeyImpl) Marshal() (string, error) {
 	jwk, err := k.Jwk()
 	if err != nil {
@@ -78,7 +60,7 @@ func (k *RsaPublicKeyImpl) Marshal() (string, error) {
 	return JwkToString(jwk)
 }
 
-//MarshalPem returns the key marshalled to a PEM string, or error
+// MarshalPem returns the key marshalled to a PEM string, or error
 func (k *RsaPublicKeyImpl) MarshalPem() (string, error) {
 	derEncoded, err := x509.MarshalPKIXPublicKey(&k.key)
 	if err != nil {
@@ -93,10 +75,10 @@ func (k *RsaPublicKeyImpl) MarshalPem() (string, error) {
 	if err := pem.Encode(&output, &block); err != nil {
 		return "", err
 	}
-	return string(output.Bytes()), nil
+	return output.String(), nil
 }
 
-//Verify data matches signature
+// Verify data matches signature
 func (k *RsaPublicKeyImpl) Verify(operation jose.KeyOps, data []byte, signature []byte) bool {
 	ops := intersection(validVerificationOps, k.jwk.Ops())
 	if !isSubset(ops, []jose.KeyOps{operation}) {
@@ -128,7 +110,7 @@ func (k *RsaPublicKeyImpl) Encrypt(requested jose.KeyOps, hash crypto.Hash, data
 	return rsa.EncryptOAEP(hash.New(), rand.Reader, &k.key, data, nil)
 }
 
-//Certificates for verification key
+// Certificates for verification key
 func (k *RsaPublicKeyImpl) Certificates() []*x509.Certificate {
 	return k.jwk.X5C()
 }

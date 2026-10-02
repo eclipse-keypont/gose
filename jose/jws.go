@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package jose
 
@@ -28,7 +10,7 @@ import (
 	"strings"
 )
 
-//JwsHeader header for JWS
+// JwsHeader header for JWS
 type JwsHeader struct {
 	Alg Alg    `json:"alg"`
 	Jku string `json:"jku,omitempty"`
@@ -43,12 +25,12 @@ type JwsHeader struct {
 	Crit   []string `json:"crit,omitempty"`
 }
 
-//Audiences holds audience members
+// Audiences holds audience members
 type Audiences struct {
 	Aud []string
 }
 
-//UnmarshalJSON byte slice to audience members or error
+// UnmarshalJSON byte slice to audience members or error
 func (audiences *Audiences) UnmarshalJSON(src []byte) (err error) {
 	var toUnmarshal interface{}
 	if err = json.Unmarshal(src, &toUnmarshal); err != nil {
@@ -72,7 +54,7 @@ func (audiences *Audiences) UnmarshalJSON(src []byte) (err error) {
 	return
 }
 
-//MarshalJSON audience to byte slice or error
+// MarshalJSON audience to byte slice or error
 func (audiences *Audiences) MarshalJSON() (dst []byte, err error) {
 	switch len(audiences.Aud) {
 	case 1:
@@ -83,7 +65,7 @@ func (audiences *Audiences) MarshalJSON() (dst []byte, err error) {
 	}
 }
 
-//Jws jave web signature
+// Jws jave web signature
 type Jws struct {
 	Header    *JwsHeader
 	Payload   interface{}
@@ -115,13 +97,13 @@ func (jws *Jws) MarshalBody() (body string, err error) {
 	return
 }
 
-//Body return either the original JWS payload or alternatively one generated.
+// Body return either the original JWS payload or alternatively one generated.
 func (jws *Jws) Body() (body string, err error) {
 	body, err = jws.MarshalBody()
 	return
 }
 
-//Unmarshal to body string, or error
+// Unmarshal to body string, or error
 func (jws *Jws) Unmarshal(src string) (body string, err error) {
 	/* Compact JWS encoding. */
 	parts := strings.SplitN(src, ".", 3)
@@ -144,7 +126,7 @@ func (jws *Jws) Unmarshal(src string) (body string, err error) {
 	return
 }
 
-//MarshalJws body and signature to a string
+// MarshalJws body and signature to a string
 func MarshalJws(body string, signature []byte) string {
 	return fmt.Sprintf("%s.%s", body, base64.RawURLEncoding.EncodeToString(signature))
 }

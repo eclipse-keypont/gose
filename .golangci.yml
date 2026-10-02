@@ -1,0 +1,65 @@
+# golangci-lint configuration (v2 schema).
+# Run locally with: golangci-lint run
+# Docs: https://golangci-lint.run/
+version: "2"
+
+linters:
+  enable:
+    # Defaults (errcheck, govet, ineffassign, staticcheck, unused) stay on.
+    - bodyclose      # checks HTTP response bodies are closed
+    - gosec          # security-focused checks (relevant for a crypto lib)
+    - misspell       # catches common spelling mistakes in comments/strings
+    - revive         # fast, configurable replacement for golint
+    - unconvert      # flags unnecessary type conversions
+    - unparam        # reports unused function parameters
+    - errorlint      # finds problems with Go 1.13+ error wrapping
+    - nilerr         # returning nil when an error is non-nil
+    - copyloopvar    # detects unnecessary loop-var copies (Go 1.22+)
+    - prealloc       # suggests slice preallocation
+
+  settings:
+    gosec:
+      excludes:
+        # G115: integer overflow on conversion — noisy against the PKCS#11
+        # C-style API (CK_ULONG <-> int) reached through crypto11/pkcs11-go.
+        # Re-enable if you want to audit those conversions explicitly.
+        - G115
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test files exercise edge cases and intentionally ignore some errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unparam
+      # These implement/exercise the legacy (non-RFC7516-compliant) jose.Jwe and
+      # jose.JweHeader types on purpose, for backwards compatibility.
+      - path: jwe_direct_(en|de)cryptor_aead(_test)?\.go
+        linters:
+          - staticcheck
+        text: "SA1019"
+      # G505: blank-imports crypto/sha1 to guarantee crypto.SHA1.New() is linked in.
+      # RFC 7518 §4.3 defines "RSA-OAEP" as OAEP with SHA-1, so gose must be able to
+      # produce and consume it to interoperate; SHA-1's collision resistance is not
+      # relied upon in the OAEP construction.
+      - path: rsa_oaep_alg\.go
+        linters:
+          - gosec
+        text: "G505"
+      # Exercises rsa.PrivateKey.Precomputed.CRTValues, which crypto/rsa keeps
+      # populating for backwards compatibility despite deprecating it.
+      - path: helpers_test\.go
+        linters:
+          - staticcheck
+        text: "SA1019"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/eclipse-keypont/gose

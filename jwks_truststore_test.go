@@ -1,37 +1,21 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
 import (
 	"bytes"
+	"context"
 	"errors"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 
-	"github.com/ThalesGroup/gose/jose"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const (
@@ -63,8 +47,8 @@ type httpClientMock struct {
 	mock.Mock
 }
 
-func (client *httpClientMock) Get(url string) (resp *http.Response, err error) {
-	args := client.Called(url)
+func (client *httpClientMock) Do(req *http.Request) (resp *http.Response, err error) {
+	args := client.Called(req.URL.String())
 	return args.Get(0).(*http.Response), args.Error(1)
 }
 
@@ -82,46 +66,46 @@ func TestJwksTrustStore_Remove(t *testing.T) {
 
 func TestJwksTrustStore_GetWithSingleIssuer(t *testing.T) {
 	mockedClient := &httpClientMock{}
-	mockedClient.On("Get", "https://www.googleapis.com/oauth2/v3/certs").Return(
+	mockedClient.On("Do", "https://www.googleapis.com/oauth2/v3/certs").Return(
 		&http.Response{
 			StatusCode: http.StatusOK,
-			Body:       ioutil.NopCloser(bytes.NewReader([]byte(jwks))),
+			Body:       io.NopCloser(bytes.NewReader([]byte(jwks))),
 		}, nil).Once()
 	store := NewJwksKeyStore("https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs")
 	store.client = mockedClient
-	key, _ := store.Get("https://accounts.google.com", "60f4060e58d75fd3f70beff88c794a775327aa31")
+	key, _ := store.Get(context.Background(), "https://accounts.google.com", "60f4060e58d75fd3f70beff88c794a775327aa31")
 	assert.NotNil(t, key)
 	require.Len(t, store.keys, 2)
-	got, _ := store.Get("https://accounts.google.com", "df8d9ee403bcc7185ad51041194bd3433742d9aa")
+	got, _ := store.Get(context.Background(), "https://accounts.google.com", "df8d9ee403bcc7185ad51041194bd3433742d9aa")
 	assert.NotNil(t, got)
 	mockedClient.AssertExpectations(t)
 }
 
 func TestJwksTrustStore_GetWithMultipleIssuer(t *testing.T) {
 	mockedClient := &httpClientMock{}
-	mockedClient.On("Get", "https://www.googleapis.com/oauth2/v3/certs").Return(
+	mockedClient.On("Do", "https://www.googleapis.com/oauth2/v3/certs").Return(
 		&http.Response{
 			StatusCode: http.StatusOK,
-			Body:       ioutil.NopCloser(bytes.NewReader([]byte(jwks))),
+			Body:       io.NopCloser(bytes.NewReader([]byte(jwks))),
 		}, nil).Once()
 	store := NewJwksKeyStore("https://accounts.google.com,https://accounts.thalesgroup.com", "https://www.googleapis.com/oauth2/v3/certs")
 	store.client = mockedClient
-	key, _ := store.Get("https://accounts.google.com", "60f4060e58d75fd3f70beff88c794a775327aa31")
+	key, _ := store.Get(context.Background(), "https://accounts.google.com", "60f4060e58d75fd3f70beff88c794a775327aa31")
 	assert.NotNil(t, key)
 	require.Len(t, store.keys, 2)
-	got, _ := store.Get("https://accounts.thalesgroup.com", "df8d9ee403bcc7185ad51041194bd3433742d9aa")
+	got, _ := store.Get(context.Background(), "https://accounts.thalesgroup.com", "df8d9ee403bcc7185ad51041194bd3433742d9aa")
 	assert.NotNil(t, got)
 	mockedClient.AssertExpectations(t)
 }
 
 func TestJwksTrustStore_GetHttpClientError(t *testing.T) {
 	mockedClient := &httpClientMock{}
-	mockedClient.On("Get", "https://www.googleapis.com/oauth2/v3/certs").Return(
+	mockedClient.On("Do", "https://www.googleapis.com/oauth2/v3/certs").Return(
 		(*http.Response)(nil), errors.New("expected")).Times(2)
 	store := NewJwksKeyStore("https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs")
 	store.client = mockedClient
 	for i := 0; i < 2; i++ {
-		key, _ := store.Get("https://accounts.google.com", "invalid")
+		key, _ := store.Get(context.Background(), "https://accounts.google.com", "invalid")
 		assert.Nil(t, key)
 		require.Len(t, store.keys, 0)
 	}
@@ -130,15 +114,15 @@ func TestJwksTrustStore_GetHttpClientError(t *testing.T) {
 
 func TestJwksTrustStore_GetHttpError(t *testing.T) {
 	mockedClient := &httpClientMock{}
-	mockedClient.On("Get", "https://www.googleapis.com/oauth2/v3/certs").Return(
+	mockedClient.On("Do", "https://www.googleapis.com/oauth2/v3/certs").Return(
 		&http.Response{
 			StatusCode: http.StatusForbidden,
-			Body:       ioutil.NopCloser(bytes.NewReader([]byte(jwks))),
+			Body:       io.NopCloser(bytes.NewReader([]byte(jwks))),
 		}, nil).Times(2)
 	store := NewJwksKeyStore("https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs")
 	store.client = mockedClient
 	for i := 0; i < 2; i++ {
-		key, _ := store.Get("https://accounts.google.com", "invalid")
+		key, _ := store.Get(context.Background(), "https://accounts.google.com", "invalid")
 		assert.Nil(t, key)
 		require.Len(t, store.keys, 0)
 	}
@@ -147,15 +131,15 @@ func TestJwksTrustStore_GetHttpError(t *testing.T) {
 
 func TestJwksTrustStore_GetInvalidJwksEncoding(t *testing.T) {
 	mockedClient := &httpClientMock{}
-	mockedClient.On("Get", "https://www.googleapis.com/oauth2/v3/certs").Return(
+	mockedClient.On("Do", "https://www.googleapis.com/oauth2/v3/certs").Return(
 		&http.Response{
 			StatusCode: http.StatusOK,
-			Body:       ioutil.NopCloser(bytes.NewReader([]byte("invalid"))),
+			Body:       io.NopCloser(bytes.NewReader([]byte("invalid"))),
 		}, nil).Times(2)
 	store := NewJwksKeyStore("https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs")
 	store.client = mockedClient
 	for i := 0; i < 2; i++ {
-		key, _ := store.Get("https://accounts.google.com", "invalid")
+		key, _ := store.Get(context.Background(), "https://accounts.google.com", "invalid")
 		assert.Nil(t, key)
 		require.Len(t, store.keys, 0)
 	}

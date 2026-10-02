@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -26,6 +8,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -42,7 +25,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const (
@@ -87,25 +70,41 @@ func intersection(first []jose.KeyOps, second []jose.KeyOps) []jose.KeyOps {
 	return result
 }
 
+// ecdsaCurveForAlg resolves the elliptic curve for an EC JWK's "alg".
+//
+// A JWK's Go type is chosen from "kty" alone and is never cross-validated against
+// "alg", so an EC key can arrive carrying an RSA alg — RFC 7517 §4.4 permits it and
+// the document is well formed. algToOptsMap then yields a crypto.Hash, a
+// *rsa.PSSOptions, or nothing at all, and an unchecked assertion to *ECDSAOptions
+// panics. Resolving through this helper turns that into an error.
+func ecdsaCurveForAlg(alg jose.Alg) (elliptic.Curve, error) {
+	opts, ok := algToOptsMap[alg].(*ECDSAOptions)
+	if !ok {
+		return nil, ErrInvalidKeyType
+	}
+	return opts.curve, nil
+}
+
 // LoadPrivateKey loads the jwk into a crypto.Signer for performing signing operations
 func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error) {
 	privateKeyAlgs := map[jose.Alg]bool{
-		jose.AlgRS256:   true,
-		jose.AlgRS384:   true,
-		jose.AlgRS512:   true,
-		jose.AlgPS256:   true,
-		jose.AlgPS384:   true,
-		jose.AlgPS512:   true,
-		jose.AlgES256:   true,
-		jose.AlgES384:   true,
-		jose.AlgES512:   true,
-		jose.AlgRSAOAEP: true,
+		jose.AlgRS256:       true,
+		jose.AlgRS384:       true,
+		jose.AlgRS512:       true,
+		jose.AlgPS256:       true,
+		jose.AlgPS384:       true,
+		jose.AlgPS512:       true,
+		jose.AlgES256:       true,
+		jose.AlgES384:       true,
+		jose.AlgES512:       true,
+		jose.AlgRSAOAEP:     true,
+		jose.AlgRSAOAEPSHA2: true,
 	}
 
 	if _, ok := privateKeyAlgs[jwk.Alg()]; !ok {
 		return nil, ErrInvalidKeyType
 	}
-	if required != nil && len(required) > 0 && !isSubset(jwk.Ops(), required) {
+	if len(required) > 0 && !isSubset(jwk.Ops(), required) {
 		return nil, ErrInvalidOperations
 	}
 	switch v := jwk.(type) {
@@ -142,7 +141,11 @@ func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error)
 		key.X = v.X.Int()
 		key.Y = v.Y.Int()
 		key.D = v.D.Int()
-		key.Curve = algToOptsMap[v.Alg()].(*ECDSAOptions).curve
+		curve, err := ecdsaCurveForAlg(v.Alg())
+		if err != nil {
+			return nil, err
+		}
+		key.Curve = curve
 		return &key, nil
 	default:
 		return nil, ErrUnsupportedKeyType
@@ -152,21 +155,22 @@ func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error)
 // LoadPublicKey loads jwk as a public key for cryptographic verification operations.
 func LoadPublicKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.PublicKey, error) {
 	publicKeyAlgs := map[jose.Alg]bool{
-		jose.AlgRS256:   true,
-		jose.AlgRS384:   true,
-		jose.AlgRS512:   true,
-		jose.AlgPS256:   true,
-		jose.AlgPS384:   true,
-		jose.AlgPS512:   true,
-		jose.AlgES256:   true,
-		jose.AlgES384:   true,
-		jose.AlgES512:   true,
-		jose.AlgRSAOAEP: true,
+		jose.AlgRS256:       true,
+		jose.AlgRS384:       true,
+		jose.AlgRS512:       true,
+		jose.AlgPS256:       true,
+		jose.AlgPS384:       true,
+		jose.AlgPS512:       true,
+		jose.AlgES256:       true,
+		jose.AlgES384:       true,
+		jose.AlgES512:       true,
+		jose.AlgRSAOAEP:     true,
+		jose.AlgRSAOAEPSHA2: true,
 	}
 	if _, ok := publicKeyAlgs[jwk.Alg()]; !ok {
 		return nil, ErrInvalidKeyType
 	}
-	if required != nil && len(required) > 0 && !isSubset(jwk.Ops(), required) {
+	if len(required) > 0 && !isSubset(jwk.Ops(), required) {
 		return nil, ErrInvalidOperations
 	}
 	switch v := jwk.(type) {
@@ -192,7 +196,11 @@ func LoadPublicKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.PublicKey, erro
 		}
 		key.X = v.X.Int()
 		key.Y = v.Y.Int()
-		key.Curve = algToOptsMap[v.Alg()].(*ECDSAOptions).curve
+		curve, err := ecdsaCurveForAlg(v.Alg())
+		if err != nil {
+			return nil, err
+		}
+		key.Curve = curve
 		return &key, nil
 	default:
 		return nil, ErrUnsupportedKeyType
@@ -297,11 +305,11 @@ func LoadJwk(reader io.ReadSeeker, required []jose.KeyOps) (jwk jose.Jwk, err er
 // LoadJwkFromFile loads file as JWK or error
 func LoadJwkFromFile(file string, required []jose.KeyOps) (jose.Jwk, error) {
 	/* Load jwk from file. */
-	fd, err := os.Open(file)
+	fd, err := os.Open(file) // #nosec G304 -- file path is a caller-supplied argument to this public API
 	if err != nil {
 		return nil, ErrInvalidSigningKeyURL
 	}
-	defer fd.Close()
+	defer func() { _ = fd.Close() }()
 	return LoadJwk(fd, required)
 }
 
@@ -312,17 +320,27 @@ var inverseOps = map[jose.KeyOps]jose.KeyOps{
 	jose.KeyOpsVerify:  jose.KeyOpsSign,
 }
 
-// TODO this method always return PS algortihm for signature but never RSA alg for encryption.
-//
-//	need to find a way to return encryption alg
+// rsaBitsToAlg maps RSA key size to the recommended signing algorithm (PS family)
+// based on NIST 2016 recommendations.
 func rsaBitsToAlg(bitLen int) jose.Alg {
-	/* Based on NIST recommendations from 2016. */
 	if bitLen >= 15360 {
 		return jose.AlgPS512
 	} else if bitLen >= 7680 {
 		return jose.AlgPS384
 	}
 	return jose.AlgPS256
+}
+
+// rsaAlgFromOps selects the RSA algorithm based on intended key operations:
+// encryption/decryption uses AlgRSAOAEP; all other operations fall back to the
+// key-size-based signing algorithm from rsaBitsToAlg.
+func rsaAlgFromOps(bitLen int, ops []jose.KeyOps) jose.Alg {
+	for _, op := range ops {
+		if op == jose.KeyOpsEncrypt || op == jose.KeyOpsDecrypt {
+			return jose.AlgRSAOAEP
+		}
+	}
+	return rsaBitsToAlg(bitLen)
 }
 
 func ecBitsToAlg(bitLen int) jose.Alg {
@@ -378,14 +396,6 @@ func JwkToString(jwk jose.Jwk) (string, error) {
 	return string(b), nil
 }
 
-func base64EncodeUInt32(val uint32) string {
-	var buf bytes.Buffer
-	if err := binary.Write(&buf, binary.BigEndian, &val); err != nil {
-		slog.Error("binary write error", "err", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf.Bytes())
-}
-
 func uintToBytesBigEndian(val uint64) []byte {
 	var buf bytes.Buffer
 	if err := binary.Write(&buf, binary.BigEndian, &val); err != nil {
@@ -410,7 +420,7 @@ func JwkFromPrivateKey(privateKey crypto.Signer, operations []jose.KeyOps, certs
 		if v.E > math.MaxInt32 {
 			return nil, ErrInvalidExponent
 		}
-		alg := rsaBitsToAlg(v.N.BitLen())
+		alg := rsaAlgFromOps(v.N.BitLen(), operations)
 		/* Key generation. */
 		v.Precompute()
 		var rsa jose.PrivateRsaKey
@@ -465,10 +475,7 @@ func JwkFromPublicKey(publicKey crypto.PublicKey, operations []jose.KeyOps, cert
 		if v.E > math.MaxInt32 {
 			return nil, ErrInvalidExponent
 		}
-		// TODO add the possibility to choose the algorithm with an input
-		//  here, only PS is returned, nothing about encryption
-
-		alg := rsaBitsToAlg(v.N.BitLen())
+		alg := rsaAlgFromOps(v.N.BitLen(), operations)
 		/* Key generation. */
 		var rsa jose.PublicRsaKey
 		rsa.SetAlg(alg)
@@ -554,7 +561,7 @@ func loadSymmetricBytes(jwk jose.Jwk, required []jose.KeyOps) (key []byte, err e
 		err = ErrInvalidKeyType
 		return
 	}
-	if required != nil && len(required) > 0 && !isSubset(jwk.Ops(), required) {
+	if len(required) > 0 && !isSubset(jwk.Ops(), required) {
 		err = ErrInvalidOperations
 		return
 	}

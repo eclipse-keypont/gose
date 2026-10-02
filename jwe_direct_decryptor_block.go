@@ -1,34 +1,18 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/ThalesGroup/gose/jose"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
+// JweDirectDecryptorBlock implements decryption of a compact JWE using direct key agreement with a block cipher.
 type JweDirectDecryptorBlock struct {
-	aesKey  BlockEncryptionKey
+	aesKey      BlockEncryptionKey
 	jweVerifier JweHmacVerifierImpl
 }
 
@@ -44,11 +28,11 @@ func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plainte
 	//   validated.
 	var jwe jose.JweRfc7516Compact
 	if err = jwe.Unmarshal(marshalledJwe); err != nil {
-		return nil, nil, fmt.Errorf("error unmarshalling the jwe: %v", err)
+		return nil, nil, fmt.Errorf("error unmarshalling the jwe: %w", err)
 	}
 	// check the algorithm in header
 	if jwe.ProtectedHeader.Alg != decryptor.aesKey.Algorithm() {
-		return nil, nil, fmt.Errorf("error checking the JWE protected header's algorthim. algorithm is '%v' but expected is '%v'", jwe.ProtectedHeader.Alg, decryptor.aesKey.Algorithm())
+		return nil, nil, fmt.Errorf("error checking the JWE protected header's algorithm. algorithm is '%v' but expected is '%v'", jwe.ProtectedHeader.Alg, decryptor.aesKey.Algorithm())
 	}
 	// check the keys for direct encryption
 	if jwe.ProtectedHeader.Kid != decryptor.aesKey.Kid() {
@@ -56,11 +40,11 @@ func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plainte
 	}
 
 	// INTEGRITY CHECK before decryption
-	integrity, err := decryptor.jweVerifier.VerifyCompact(jwe);
+	integrity, err := decryptor.jweVerifier.VerifyCompact(jwe)
 	if err != nil {
 		return nil, nil, err
 	}
-	if ! integrity {
+	if !integrity {
 		return nil, nil, fmt.Errorf("error corrupted jwe : integrity check failed")
 	}
 
@@ -73,8 +57,19 @@ func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plainte
 
 	// get the size of the final plaintext
 	//input, err := jwe.ProtectedHeader.OtherAad.MarshalJSON()
+	if jwe.ProtectedHeader.OtherAad == nil {
+		return nil, nil, fmt.Errorf("error decoding plaintext length: missing length header")
+	}
 	data := jwe.ProtectedHeader.OtherAad.B
+	// Validate before use: a truncated field panics BigEndian.Uint64; an oversized
+	// value causes OOM; nil OtherAad was already rejected above.
+	if len(data) < 8 {
+		return nil, nil, fmt.Errorf("error decoding plaintext length: header field too short")
+	}
 	plaintextLength := binary.BigEndian.Uint64(data)
+	if plaintextLength > uint64(len(plaintextBlock)) {
+		return nil, nil, fmt.Errorf("error decoding plaintext: declared length %d exceeds decrypted length %d", plaintextLength, len(plaintextBlock))
+	}
 	plaintext = make([]byte, plaintextLength)
 	copy(plaintext, plaintextBlock[:plaintextLength])
 
@@ -85,7 +80,7 @@ func (decryptor *JweDirectDecryptorBlock) Decrypt(marshalledJwe string) (plainte
 func NewJweDirectDecryptorBlock(aesKey BlockEncryptionKey, hmacKey HmacKey) *JweDirectDecryptorBlock {
 	// Create map out of our list of keys. The map is keyed in Kid.
 	decryptor := &JweDirectDecryptorBlock{
-		aesKey:  aesKey,
+		aesKey:      aesKey,
 		jweVerifier: JweHmacVerifierImpl{hmacKey: hmacKey},
 	}
 	return decryptor

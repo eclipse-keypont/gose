@@ -1,24 +1,7 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
+// Package jose implements the data types for JWK, JWS, and JWE as defined by RFC 7515-7517.
 package jose
 
 import (
@@ -52,6 +35,7 @@ type Enc string
 // Zip is a type representing values destined for the `zip` field in a JWE header.
 type Zip string
 
+// Header holds the common JOSE header fields shared by JWS and JWE.
 type Header struct {
 	Alg Alg    `json:"alg"`
 	Jku string `json:"jku,omitempty"`
@@ -96,15 +80,17 @@ const (
 	AlgA256CBC Alg = "A256CBC"
 	// AlgDir direct encryption for use with JWEs
 	AlgDir Alg = "dir"
-	// AlgRSAOAEP RSA OAEP Key encryption for use with JWEs
+	// AlgRSAOAEP RSAES-OAEP with SHA-1 and MGF1 with SHA-1, as registered by RFC 7518 §4.3.
+	// Alias of AlgRSAOAEPSHA1; prefer the explicitly named constant in new code.
 	AlgRSAOAEP Alg = "RSA-OAEP"
-	// AlgRSAOAEPSHA1 and AlgRSAOAEPSHA2 are here to differentiate RSA OAEP using SHA1 or SHA2 for
-	// encryption / decryption in the code, like in switch case statements for example.
-	// They have the same value as AlgRSAOAEP nonetheless.
-	// Because some KMS like SoftHSMv2 do not implement RSA-OAEP with SHA2 yet, but some others do,
-	// we need to support both of these modes in gose implementation.
+	// AlgRSAOAEPSHA1 RSAES-OAEP with SHA-1, RFC 7518 §4.3.
+	// Some KMS, notably SoftHSMv2, implement only the SHA-1 variant, so gose supports both
+	// this and AlgRSAOAEPSHA2. The two are distinct on the wire: a JWE header advertising
+	// "RSA-OAEP" is decryptable only with SHA-1, and "RSA-OAEP-256" only with SHA-256.
 	AlgRSAOAEPSHA1 Alg = "RSA-OAEP"
-	AlgRSAOAEPSHA2 Alg = "RSA-OAEP"
+	// AlgRSAOAEPSHA2 RSAES-OAEP with SHA-256 and MGF1 with SHA-256, RFC 7518 §4.3.
+	// See AlgRSAOAEPSHA1 for why both variants exist.
+	AlgRSAOAEPSHA2 Alg = "RSA-OAEP-256"
 
 	//CrvP256 NIST P-256
 	CrvP256 Crv = "P-256"
@@ -185,20 +171,30 @@ var (
 
 	//ErrJweFormat when a JWE isn't formatted correctly
 	ErrJweFormat = errors.New("invalid JWE format")
+
+	//ErrTooManyKeyOps when a JWK declares more key_ops entries than can plausibly be
+	//meaningful. RFC 7517 §4.3 defines a small fixed set; a document carrying thousands
+	//is malformed, and bounding it keeps key_ops validation cheap.
+	ErrTooManyKeyOps = errors.New("too many key_ops entries")
+
+	//ErrCritHeaderNotSupported when a JWS/JWT carries a non-empty "crit" header. gose
+	//implements no JWS header extensions, so RFC 7515 §4.1.11 requires rejecting any
+	//token that marks extensions as critical.
+	ErrCritHeaderNotSupported = errors.New("unsupported critical header parameter")
 )
 
 func unmarshalJSONBlob(src []byte, decoder *base64.Encoding) (dst []byte, err error) {
-	len := len(src)
+	srcLen := len(src)
 	// We always want at least 1 character pre and proceeded by a quote.
-	if len < 3 || src[0] != '"' || src[len-1] != '"' {
+	if srcLen < 3 || src[0] != '"' || src[srcLen-1] != '"' {
 		err = ErrBlobEmpty
 		return
 	}
 	// Allocate (possibly over allocate) our dst buffer.
-	dstLen := decoder.DecodedLen(len - 2)
+	dstLen := decoder.DecodedLen(srcLen - 2)
 	tmp := make([]byte, dstLen)
 	var decoded int
-	if decoded, err = decoder.Decode(tmp, src[1:len-1]); err != nil {
+	if decoded, err = decoder.Decode(tmp, src[1:srcLen-1]); err != nil {
 		return
 	}
 	// Only return the exact length buffer
@@ -213,48 +209,48 @@ func marshalJSONBlob(src []byte, encoder *base64.Encoding) (dst []byte, err erro
 		return
 	}
 
-	len := encoder.EncodedLen(len(src)) + 2
-	dst = make([]byte, len)
+	dstLen := encoder.EncodedLen(len(src)) + 2
+	dst = make([]byte, dstLen)
 	dst[0] = '"'
-	dst[len-1] = '"'
-	encoder.Encode(dst[1:len-1], src)
+	dst[dstLen-1] = '"'
+	encoder.Encode(dst[1:dstLen-1], src)
 	return
 }
 
-//BigNum for managing big.Int
+// BigNum for managing big.Int
 type BigNum struct {
 	b big.Int
 }
 
-//SetBytes of BigNum
+// SetBytes of BigNum
 func (b *BigNum) SetBytes(val []byte) *BigNum {
 	b.b.SetBytes(val)
 	return b
 }
 
-//Set bigNum with bit.Int
+// Set bigNum with bit.Int
 func (b *BigNum) Set(val *big.Int) *BigNum {
 	b.b.SetBytes(val.Bytes())
 	return b
 }
 
-//Int as big.Int
+// Int as big.Int
 func (b *BigNum) Int() *big.Int {
 	return &b.b
 }
 
-//Empty out BigNum
+// Empty out BigNum
 func (b *BigNum) Empty() bool {
 	return b.b.BitLen() == 0
 }
 
-//MarshalJSON as byte slice or error
+// MarshalJSON as byte slice or error
 func (b *BigNum) MarshalJSON() (dst []byte, err error) {
 	dst, err = marshalJSONBlob(b.b.Bytes(), base64.RawURLEncoding)
 	return
 }
 
-//UnmarshalJSON byte slice or error
+// UnmarshalJSON byte slice or error
 func (b *BigNum) UnmarshalJSON(src []byte) (err error) {
 	var dst []byte
 	if dst, err = unmarshalJSONBlob(src, base64.RawURLEncoding); err != nil {
@@ -269,25 +265,25 @@ type Blob struct {
 	B []byte
 }
 
-//Bytes of blob in byte slice
+// Bytes of blob in byte slice
 func (b *Blob) Bytes() []byte {
 	return b.B
 }
 
-//UnmarshalJSON byte slice to Blob, or error
+// UnmarshalJSON byte slice to Blob, or error
 func (b *Blob) UnmarshalJSON(src []byte) error {
 	var err error
 	b.B, err = unmarshalJSONBlob(src, base64.RawURLEncoding)
 	return err
 }
 
-//MarshalJSON blob to byte slice
+// MarshalJSON blob to byte slice
 func (b *Blob) MarshalJSON() (dst []byte, err error) {
 	dst, err = marshalJSONBlob(b.B, base64.RawURLEncoding)
 	return
 }
 
-//SetBytes of blob
+// SetBytes of blob
 func (b *Blob) SetBytes(val []byte) *Blob {
 	b.B = val
 	return b

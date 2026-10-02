@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -28,7 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const minimumRsaKeySize = 2048 // The minimum RSA key size allowable as defined https://tools.ietf.org/html/rfc7518#section-3.5
@@ -52,7 +34,8 @@ var (
 		jose.AlgA256GCM: 32,
 	}
 	rsaEncryptionAlgs = map[jose.Alg]bool{
-		jose.AlgRSAOAEP: true,
+		jose.AlgRSAOAEP:     true,
+		jose.AlgRSAOAEPSHA2: true,
 	}
 )
 
@@ -72,11 +55,11 @@ func generateRsaKey(alg jose.Alg, bitLen int, operations []jose.KeyOps) (jose.Jw
 	return jwk, privateKey, nil
 }
 
-//RsaSigningKeyGenerator handles generating a RSA signing key
+// RsaSigningKeyGenerator handles generating a RSA signing key
 type RsaSigningKeyGenerator struct {
 }
 
-//Generate an RSA key using a given algorithm, length, and scope to certain jwk operations.
+// Generate an RSA key using a given algorithm, length, and scope to certain jwk operations.
 func (generator *RsaSigningKeyGenerator) Generate(alg jose.Alg, bitLen int, operations []jose.KeyOps) (SigningKey, error) {
 	/* Generate an RSA signing jwk. */
 	if _, ok := rsaSigningAlgs[alg]; !ok {
@@ -89,11 +72,11 @@ func (generator *RsaSigningKeyGenerator) Generate(alg jose.Alg, bitLen int, oper
 	return NewSigningKey(jwk, operations)
 }
 
-//ECDSASigningKeyGenerator handles generating an ECDSA signing key
+// ECDSASigningKeyGenerator handles generating an ECDSA signing key
 type ECDSASigningKeyGenerator struct {
 }
 
-//Generate an ECDSA key using a given algorithm, and scoped to certain jwk operations.
+// Generate an ECDSA key using a given algorithm, and scoped to certain jwk operations.
 func (g *ECDSASigningKeyGenerator) Generate(alg jose.Alg, operations []jose.KeyOps) (SigningKey, error) {
 
 	curve, ok := ecdsAlgs[alg]
@@ -140,11 +123,11 @@ func (g *AuthenticatedEncryptionKeyGenerator) Generate(alg jose.Alg, operations 
 	return cryptor, jwk, nil
 }
 
-//RsaKeyDecryptionKeyGenerator handles generating a RSA encryption keys
+// RsaKeyDecryptionKeyGenerator handles generating a RSA encryption keys
 type RsaKeyDecryptionKeyGenerator struct {
 }
 
-//Generate an RSA key using a given algorithm, length, and scope to certain jwk operations.
+// Generate an RSA key using a given algorithm, length, and scope to certain jwk operations.
 func (generator *RsaKeyDecryptionKeyGenerator) Generate(alg jose.Alg, bitLen int, operations []jose.KeyOps) (AsymmetricDecryptionKey, error) {
 	/* Generate an RSA encryption jwk. */
 	if _, ok := rsaEncryptionAlgs[alg]; !ok {

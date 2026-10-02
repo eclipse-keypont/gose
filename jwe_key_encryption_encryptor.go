@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package gose
 
@@ -27,8 +9,9 @@ import (
 	"crypto/cipher"
 	"crypto/rsa"
 	"fmt"
-	"github.com/ThalesGroup/gose/jose"
 	"io"
+
+	"github.com/eclipse-keypont/gose/jose"
 )
 
 const cekSize uint8 = 32
@@ -41,8 +24,7 @@ const cekAlgorithm = jose.AlgA256GCM
 type JweRsaKeyEncryptionEncryptorImpl struct {
 	rsaPublicKey *rsa.PublicKey
 	rsaPublicKid string
-	rsaAlg jose.Alg
-	cekAlg jose.Alg
+	rsaAlg       jose.Alg
 	randomSource io.Reader
 }
 
@@ -51,10 +33,22 @@ type JweRsaKeyEncryptionEncryptorImpl struct {
 // produce the JWE Encrypted Key.
 // Authenticated encryption is performed on the plaintext using the AES GCM algorithm with a 256-bit
 // key to produce the ciphertext and the Authentication Tag.
+//
+// oaepHash selects the OAEP digest and therefore the "alg" advertised in the protected
+// header: crypto.SHA1 produces "RSA-OAEP" and crypto.SHA256 produces "RSA-OAEP-256", per
+// RFC 7518 §4.3. Any other digest is rejected, because RFC 7518 registers no "alg" value
+// that would describe the result to a recipient.
 func (e *JweRsaKeyEncryptionEncryptorImpl) Encrypt(plaintext []byte, oaepHash crypto.Hash) (jwe string, err error) {
+	// The header must name the digest actually used to wrap the CEK, otherwise a
+	// conformant recipient derives the wrong OAEP parameters and decryption fails.
+	oaepAlg, ok := OaepAlgFromHash(oaepHash)
+	if !ok {
+		return "", fmt.Errorf("%w: no RFC 7518 RSAES-OAEP algorithm for digest %v", ErrInvalidAlgorithm, oaepHash)
+	}
+
 	// create the protected header
-	// {"alg":"RSA-OAEP","enc":"A256GCM"}
-	protectedHeader := e.makeJweProtectedHeader()
+	// {"alg":"RSA-OAEP-256","enc":"A256GCM"}
+	protectedHeader := e.makeJweProtectedHeader(oaepAlg)
 
 	// generate the 256-bit CEK, 32 bytes long
 	cek := make([]byte, cekSize)
@@ -83,24 +77,26 @@ func (e *JweRsaKeyEncryptionEncryptorImpl) Encrypt(plaintext []byte, oaepHash cr
 
 	// encrypt the plaintext using the cek
 	var blockCipher cipher.Block
-	blockCipher, err = aes.NewCipher(cek); if err != nil {
+	blockCipher, err = aes.NewCipher(cek)
+	if err != nil {
 		return "", fmt.Errorf("error creating AES cipher: %w", err)
 	}
 	var aesGCM cipher.AEAD
-	aesGCM, err = cipher.NewGCM(blockCipher); if err != nil {
+	aesGCM, err = cipher.NewGCM(blockCipher)
+	if err != nil {
 		return "", fmt.Errorf("error creating GCM: %w", err)
 	}
 	var aesGCMCryptor AeadEncryptionKey
 	if aesGCMCryptor, err = NewAesGcmCryptor(aesGCM, e.randomSource, "", cekAlgorithm, []jose.KeyOps{jose.KeyOpsEncrypt}); err != nil {
 		return "", fmt.Errorf("error creating AES GCM Cryptor: %w", err)
 	}
-	ciphertext, tag, err := aesGCMCryptor.Seal(jose.KeyOpsEncrypt, iv, plaintext, aad);
+	ciphertext, tag, err := aesGCMCryptor.Seal(jose.KeyOpsEncrypt, iv, plaintext, aad)
 	if err != nil {
 		return "", fmt.Errorf("error encrypting the plaintext: %w", err)
 	}
 
 	// create the compact representation of the jwe using the parameters above
-	jweData:= &jose.JweRfc7516Compact{
+	jweData := &jose.JweRfc7516Compact{
 		ProtectedHeader:      *protectedHeader,
 		EncryptedKey:         encryptedCEK,
 		InitializationVector: iv,
@@ -114,12 +110,14 @@ func (e *JweRsaKeyEncryptionEncryptorImpl) Encrypt(plaintext []byte, oaepHash cr
 	return
 }
 
-// makeJweProtectedHeader builds the JWE structure
-func (e *JweRsaKeyEncryptionEncryptorImpl) makeJweProtectedHeader() *jose.JweProtectedHeader {
+// makeJweProtectedHeader builds the JWE structure.
+// oaepAlg is the RFC 7518 §4.3 algorithm matching the digest used to wrap the CEK; it is
+// authoritative over the recipient key's own "alg", which names only the OAEP family.
+func (e *JweRsaKeyEncryptionEncryptorImpl) makeJweProtectedHeader(oaepAlg jose.Alg) *jose.JweProtectedHeader {
 	return &jose.JweProtectedHeader{
 		JwsHeader: jose.JwsHeader{
-			// AlgRSAOAEP = "RSA-OAEP"
-			Alg: e.rsaAlg,
+			// "RSA-OAEP" (SHA-1) or "RSA-OAEP-256" (SHA-256)
+			Alg: oaepAlg,
 			Kid: e.rsaPublicKid,
 			Typ: "JWT",
 			Cty: "JWT",
@@ -137,7 +135,7 @@ func (e *JweRsaKeyEncryptionEncryptorImpl) makeJweProtectedHeader() *jose.JwePro
 //   - the encryption of the data performed by the CEK with AES GCM algorithm, for the IV
 func NewJweRsaKeyEncryptionEncryptorImpl(rsaPublicKeyRecipient jose.Jwk, randomSource io.Reader) (*JweRsaKeyEncryptionEncryptorImpl, error) {
 	// check if required operation is supported
-	if !isSubset(rsaPublicKeyRecipient.Ops(), []jose.KeyOps{jose.KeyOpsEncrypt})  {
+	if !isSubset(rsaPublicKeyRecipient.Ops(), []jose.KeyOps{jose.KeyOpsEncrypt}) {
 		return nil, ErrInvalidOperations
 	}
 	// create the asymmetric public key structure from the recipient
@@ -150,10 +148,16 @@ func NewJweRsaKeyEncryptionEncryptorImpl(rsaPublicKeyRecipient jose.Jwk, randomS
 	if !ok {
 		return nil, ErrInvalidKeyType
 	}
+	// an RSA key is not enough: it must be an RSAES-OAEP key rather than, say, an RS256
+	// signing key. Which of the two OAEP variants applies is chosen per-operation by the
+	// digest passed to Encrypt.
+	if !isRsaOaepAlg(rsaPublicKeyRecipient.Alg()) {
+		return nil, ErrInvalidAlgorithm
+	}
 
 	return &JweRsaKeyEncryptionEncryptorImpl{
 		rsaPublicKey: rsaKek,
-		rsaAlg: rsaPublicKeyRecipient.Alg(),
+		rsaAlg:       rsaPublicKeyRecipient.Alg(),
 		rsaPublicKid: rsaPublicKeyRecipient.Kid(),
 		randomSource: randomSource,
 	}, nil

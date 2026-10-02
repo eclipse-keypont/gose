@@ -1,23 +1,5 @@
-// Copyright 2024 Thales Group
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to
-// permit persons to whom the Software is furnished to do so, subject to
-// the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-// LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2026 Thales Group and the gose Contributors
+// SPDX-License-Identifier: MIT
 
 package jose
 
@@ -30,18 +12,18 @@ import (
 	"io"
 )
 
-//Certificate leaf for JWK
+// Certificate leaf for JWK
 type Certificate struct {
 	Certificate *x509.Certificate
 }
 
-//MarshalJSON as byte slice or error
+// MarshalJSON as byte slice or error
 func (c *Certificate) MarshalJSON() (dst []byte, err error) {
 	dst, err = marshalJSONBlob(c.Certificate.Raw, base64.StdEncoding)
 	return
 }
 
-//UnmarshalJSON byte slice to certificate, or error
+// UnmarshalJSON byte slice to certificate, or error
 func (c *Certificate) UnmarshalJSON(src []byte) (err error) {
 	var b []byte
 	if b, err = unmarshalJSONBlob(src, base64.StdEncoding); err != nil {
@@ -51,23 +33,23 @@ func (c *Certificate) UnmarshalJSON(src []byte) (err error) {
 	return err
 }
 
-//Fingerprint represents a SHA1 digest
+// Fingerprint represents a SHA1 digest
 type Fingerprint struct {
 	digest []byte
 }
 
-//Bytes of blob in byte slice
+// Bytes of blob in byte slice
 func (f *Fingerprint) Bytes() []byte {
 	return f.digest
 }
 
-//SetBytes of Fingerprint
+// SetBytes of Fingerprint
 func (f *Fingerprint) SetBytes(val []byte) *Fingerprint {
 	f.digest = val
 	return f
 }
 
-//UnmarshalJSON byte slice to Fingerprint, or error
+// UnmarshalJSON byte slice to Fingerprint, or error
 func (f *Fingerprint) UnmarshalJSON(src []byte) error {
 	var err error
 	if f.digest, err = unmarshalJSONBlob(src, base64.RawURLEncoding); err != nil {
@@ -79,7 +61,7 @@ func (f *Fingerprint) UnmarshalJSON(src []byte) error {
 	return nil
 }
 
-//MarshalJSON Fingerprint to byte slice
+// MarshalJSON Fingerprint to byte slice
 func (f *Fingerprint) MarshalJSON() (dst []byte, err error) {
 	if len(f.digest) != 20 {
 		err = ErrJwkInvalidFingerprintfomat
@@ -176,16 +158,24 @@ func (j *jwkFields) SetX5T(blob *Fingerprint) {
 	j.KeyX5T = blob
 }
 
+// maxKeyOps bounds the number of key_ops entries accepted on a JWK. RFC 7517 §4.3
+// defines eight values and does not forbid others, so this is deliberately generous
+// rather than an exact whitelist — it exists to stop a hostile JWKS body forcing
+// unbounded validation work, not to reject unusual-but-legitimate documents.
+const maxKeyOps = 64
+
 func (j *jwkFields) CheckConsistency() error {
-	// Check for duplicate KeyOps.
-	if len(j.KeyOps) > 0 {
-		for i, candidate := range j.KeyOps[:len(j.KeyOps)-1] {
-			for _, item := range j.KeyOps[i+1:] {
-				if candidate == item {
-					return ErrDuplicateKeyOps
-				}
-			}
+	// Check for duplicate KeyOps. A set keeps this linear: the previous pairwise scan
+	// was quadratic, letting a sub-1MB JWKS body burn ~15s of CPU on one core.
+	if len(j.KeyOps) > maxKeyOps {
+		return ErrTooManyKeyOps
+	}
+	seen := make(map[KeyOps]struct{}, len(j.KeyOps))
+	for _, op := range j.KeyOps {
+		if _, duplicate := seen[op]; duplicate {
+			return ErrDuplicateKeyOps
 		}
+		seen[op] = struct{}{}
 	}
 	// Check certificate and thumb-print matches
 
@@ -204,24 +194,24 @@ func (j *jwkFields) CheckConsistency() error {
 	return nil
 }
 
-//PublicRsaKeyFields Public RSA specific fields.
+// PublicRsaKeyFields Public RSA specific fields.
 type PublicRsaKeyFields struct {
 	N BigNum `json:"n"`
 	E BigNum `json:"e"`
 }
 
-//PublicRsaKey Public RSA JWK type.
+// PublicRsaKey Public RSA JWK type.
 type PublicRsaKey struct {
 	jwkFields
 	PublicRsaKeyFields
 }
 
-//Kty key type
+// Kty key type
 func (k *PublicRsaKey) Kty() Kty {
 	return KtyRSA
 }
 
-//MarshalJSON to byte slice or error
+// MarshalJSON to byte slice or error
 func (k *PublicRsaKey) MarshalJSON() (dst []byte, err error) {
 	toMarshal := struct {
 		*jwkFields
@@ -236,7 +226,7 @@ func (k *PublicRsaKey) MarshalJSON() (dst []byte, err error) {
 	return
 }
 
-//UnmarshalJSON byte slice or error
+// UnmarshalJSON byte slice or error
 func (k *PublicRsaKey) UnmarshalJSON(src []byte) (err error) {
 	toUnmarshal := struct {
 		*jwkFields
@@ -252,12 +242,13 @@ func (k *PublicRsaKey) UnmarshalJSON(src []byte) (err error) {
 	}
 	if toUnmarshal.Kty != KtyRSA {
 		err = ErrUnexpectedKeyType
+		return
 	}
 	err = k.CheckConsistency()
 	return
 }
 
-//PrivateRsaKeyFields Private RSA specific fields.
+// PrivateRsaKeyFields Private RSA specific fields.
 type PrivateRsaKeyFields struct {
 	D  BigNum `json:"d"`
 	P  BigNum `json:"p"`
@@ -267,18 +258,18 @@ type PrivateRsaKeyFields struct {
 	Qi BigNum `json:"qi"`
 }
 
-//PrivateRsaKey Private RSA JWK type.
+// PrivateRsaKey Private RSA JWK type.
 type PrivateRsaKey struct {
 	PublicRsaKey
 	PrivateRsaKeyFields
 }
 
-//Kty key type
+// Kty key type
 func (k *PrivateRsaKey) Kty() Kty {
 	return KtyRSA
 }
 
-//MarshalJSON to byte slice or error
+// MarshalJSON to byte slice or error
 func (k *PrivateRsaKey) MarshalJSON() (dst []byte, err error) {
 	toMarshal := struct {
 		Kty Kty `json:"kty"`
@@ -295,7 +286,7 @@ func (k *PrivateRsaKey) MarshalJSON() (dst []byte, err error) {
 	return
 }
 
-//UnmarshalJSON byte slice or error
+// UnmarshalJSON byte slice or error
 func (k *PrivateRsaKey) UnmarshalJSON(src []byte) (err error) {
 	toUnmarshal := struct {
 		Kty Kty `json:"kty"`
@@ -313,30 +304,31 @@ func (k *PrivateRsaKey) UnmarshalJSON(src []byte) (err error) {
 	}
 	if toUnmarshal.Kty != KtyRSA {
 		err = ErrUnexpectedKeyType
+		return
 	}
 	err = k.CheckConsistency()
 	return
 }
 
-//PublicEcKeyFields Public EC specific fields.
+// PublicEcKeyFields Public EC specific fields.
 type PublicEcKeyFields struct {
 	Crv Crv    `json:"crv"`
 	X   BigNum `json:"x"`
 	Y   BigNum `json:"y"`
 }
 
-//PublicEcKey Public EC JWK type.
+// PublicEcKey Public EC JWK type.
 type PublicEcKey struct {
 	jwkFields
 	PublicEcKeyFields
 }
 
-//Kty key type
+// Kty key type
 func (k *PublicEcKey) Kty() Kty {
 	return KtyEC
 }
 
-//MarshalJSON to byte slice or error
+// MarshalJSON to byte slice or error
 func (k *PublicEcKey) MarshalJSON() (dst []byte, err error) {
 	toMarshal := struct {
 		*jwkFields
@@ -351,7 +343,7 @@ func (k *PublicEcKey) MarshalJSON() (dst []byte, err error) {
 	return
 }
 
-//UnmarshalJSON byte slice or error
+// UnmarshalJSON byte slice or error
 func (k *PublicEcKey) UnmarshalJSON(src []byte) (err error) {
 	toUnmarshal := struct {
 		Kty Kty `json:"kty"`
@@ -367,28 +359,29 @@ func (k *PublicEcKey) UnmarshalJSON(src []byte) (err error) {
 	}
 	if toUnmarshal.Kty != KtyEC {
 		err = ErrUnexpectedKeyType
+		return
 	}
 	err = k.CheckConsistency()
 	return
 }
 
-//PrivateEcKeyFields Private EC specific fields.
+// PrivateEcKeyFields Private EC specific fields.
 type PrivateEcKeyFields struct {
 	D BigNum `json:"d"`
 }
 
-//PrivateEcKey Private EC JWK type.
+// PrivateEcKey Private EC JWK type.
 type PrivateEcKey struct {
 	PublicEcKey
 	PrivateEcKeyFields
 }
 
-//Kty key type
+// Kty key type
 func (k *PrivateEcKey) Kty() Kty {
 	return KtyEC
 }
 
-//MarshalJSON to byte slice or error
+// MarshalJSON to byte slice or error
 func (k *PrivateEcKey) MarshalJSON() (dst []byte, err error) {
 	toMarshal := struct {
 		Kty Kty `json:"kty"`
@@ -405,7 +398,7 @@ func (k *PrivateEcKey) MarshalJSON() (dst []byte, err error) {
 	return
 }
 
-//UnmarshalJSON byte slice or error
+// UnmarshalJSON byte slice or error
 func (k *PrivateEcKey) UnmarshalJSON(src []byte) (err error) {
 	toUnmarshal := struct {
 		Kty Kty `json:"kty"`
@@ -414,7 +407,7 @@ func (k *PrivateEcKey) UnmarshalJSON(src []byte) (err error) {
 		*PrivateEcKeyFields
 	}{
 		Kty:                "",
-		jwkFields:          &k.PublicEcKey.jwkFields,
+		jwkFields:          &k.jwkFields,
 		PublicEcKeyFields:  &k.PublicEcKeyFields,
 		PrivateEcKeyFields: &k.PrivateEcKeyFields,
 	}
@@ -423,28 +416,29 @@ func (k *PrivateEcKey) UnmarshalJSON(src []byte) (err error) {
 	}
 	if toUnmarshal.Kty != KtyEC {
 		err = ErrUnexpectedKeyType
+		return
 	}
 	err = k.CheckConsistency()
 	return
 }
 
-//OctSecretKeyFields Secret key specific fields.
+// OctSecretKeyFields Secret key specific fields.
 type OctSecretKeyFields struct {
 	K Blob `json:"k"`
 }
 
-//OctSecretKey Secret key JWK type.
+// OctSecretKey Secret key JWK type.
 type OctSecretKey struct {
 	jwkFields
 	OctSecretKeyFields
 }
 
-//Kty key type
+// Kty key type
 func (k *OctSecretKey) Kty() Kty {
 	return KtyOct
 }
 
-//MarshalJSON to byte slice or error
+// MarshalJSON to byte slice or error
 func (k *OctSecretKey) MarshalJSON() (dst []byte, err error) {
 	toMarshal := struct {
 		*jwkFields
@@ -459,7 +453,7 @@ func (k *OctSecretKey) MarshalJSON() (dst []byte, err error) {
 	return
 }
 
-//UnmarshalJSON to to byte slice or error
+// UnmarshalJSON to to byte slice or error
 func (k *OctSecretKey) UnmarshalJSON(src []byte) (err error) {
 	toUnmarshal := struct {
 		*jwkFields
@@ -475,12 +469,13 @@ func (k *OctSecretKey) UnmarshalJSON(src []byte) (err error) {
 	}
 	if toUnmarshal.Kty != KtyOct {
 		err = ErrUnexpectedKeyType
+		return
 	}
 	err = k.CheckConsistency()
 	return
 }
 
-//UnmarshalJwk serialization into a concrete type.
+// UnmarshalJwk serialization into a concrete type.
 func UnmarshalJwk(reader io.ReadSeeker) (jwk Jwk, err error) {
 	// First unmarshal Kty so that we can work out how to proceed.
 	decoder := json.NewDecoder(reader)
