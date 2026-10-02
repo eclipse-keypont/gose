@@ -73,6 +73,12 @@ func (encryptor *JweDirectEncryptorAead) Encrypt(plaintext, aad []byte) (string,
 		if throwawayNonceToGetLength, err = encryptor.key.GenerateNonce(); nil != err {
 			return "", err
 		}
+		// The tag is backend-supplied. A backend that returns a tag shorter than the nonce
+		// it claims to have appended would make the slice expressions below panic, so the
+		// length is checked first (CWE-248).
+		if len(jwe.Tag) < len(throwawayNonceToGetLength) {
+			return "", ErrInvalidAuthenticationTag
+		}
 		jwe.Iv = jwe.Tag[len(jwe.Tag)-len(throwawayNonceToGetLength):]
 		jwe.Tag = jwe.Tag[:len(jwe.Tag)-len(throwawayNonceToGetLength)]
 	}

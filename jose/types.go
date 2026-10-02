@@ -192,6 +192,11 @@ var (
 	//ErrJweFormat when a JWE isn't formatted correctly
 	ErrJweFormat = errors.New("invalid JWE format")
 
+	//ErrInvalidAlgorithm when a JWE/JWS header names an algorithm gose does not support
+	ErrInvalidAlgorithm = errors.New("invalid algorithm")
+	//ErrInvalidEncryption when a JWE header names an encryption gose does not support
+	ErrInvalidEncryption = errors.New("invalid encryption")
+
 	//ErrTooManyKeyOps when a JWK declares more key_ops entries than can plausibly be
 	//meaningful. RFC 7517 §4.3 defines a small fixed set; a document carrying thousands
 	//is malformed, and bounding it keeps key_ops validation cheap.
