@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -112,6 +113,49 @@ func ecdsaCurveForAlg(alg jose.Alg) (elliptic.Curve, error) {
 		return nil, ErrInvalidKeyType
 	}
 	return opts.curve, nil
+}
+
+// ecdhCurveFor maps an elliptic.Curve to its crypto/ecdh counterpart. Deriving a
+// public point through crypto/ecdh avoids the deprecated and non-constant-time
+// elliptic.Curve.ScalarBaseMult.
+func ecdhCurveFor(curve elliptic.Curve) (ecdh.Curve, error) {
+	switch curve {
+	case elliptic.P256():
+		return ecdh.P256(), nil
+	case elliptic.P384():
+		return ecdh.P384(), nil
+	case elliptic.P521():
+		return ecdh.P521(), nil
+	default:
+		return nil, ErrInvalidKeyType
+	}
+}
+
+// ecPointFromScalar derives the public point (x, y) for the private scalar d on
+// the given curve. The scalar is reduced modulo the group order and left-padded
+// to the curve's byte size, as crypto/ecdh requires.
+func ecPointFromScalar(curve elliptic.Curve, d *big.Int) (x, y *big.Int, err error) {
+	ecdhCurve, err := ecdhCurveFor(curve)
+	if err != nil {
+		return nil, nil, err
+	}
+	scalar := new(big.Int).Mod(d, curve.Params().N)
+	if scalar.Sign() == 0 {
+		return nil, nil, ErrInvalidKeyType
+	}
+	size := (curve.Params().BitSize + 7) / 8
+	priv, err := ecdhCurve.NewPrivateKey(scalar.FillBytes(make([]byte, size)))
+	if err != nil {
+		return nil, nil, err
+	}
+	// PublicKey().Bytes() is the uncompressed point: 0x04 || X || Y.
+	pub := priv.PublicKey().Bytes()
+	if len(pub) != 1+2*size {
+		return nil, nil, ErrInvalidKeyType
+	}
+	x = new(big.Int).SetBytes(pub[1 : 1+size])
+	y = new(big.Int).SetBytes(pub[1+size:])
+	return x, y, nil
 }
 
 // LoadPrivateKey loads the jwk into a crypto.Signer for performing signing operations
@@ -433,7 +477,10 @@ func PublicFromPrivate(in jose.Jwk) (jose.Jwk, error) {
 		if k.D.Empty() {
 			return nil, ErrInvalidKeyType
 		}
-		x, y := curve.ScalarBaseMult(k.D.Int().Bytes())
+		x, y, err := ecPointFromScalar(curve, k.D.Int())
+		if err != nil {
+			return nil, err
+		}
 		var result jose.PublicEcKey
 		result.PublicEcKeyFields = k.PublicEcKeyFields
 		result.X.Set(x)

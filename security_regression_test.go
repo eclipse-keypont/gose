@@ -543,7 +543,8 @@ func TestPublicFromPrivateDerivesEcPointFromD(t *testing.T) {
 	curve := elliptic.P256()
 	d, err := rand.Int(rand.Reader, curve.Params().N)
 	require.NoError(t, err)
-	expectedX, expectedY := curve.ScalarBaseMult(d.Bytes())
+	expectedX, expectedY, err := ecPointFromScalar(curve, d)
+	require.NoError(t, err)
 
 	priv := &jose.PrivateEcKey{}
 	priv.Crv = jose.CrvP256
@@ -569,7 +570,8 @@ func TestPublicFromPrivateDerivedKeyVerifies(t *testing.T) {
 	curve := elliptic.P256()
 	d, err := rand.Int(rand.Reader, curve.Params().N)
 	require.NoError(t, err)
-	x, y := curve.ScalarBaseMult(d.Bytes())
+	x, y, err := ecPointFromScalar(curve, d)
+	require.NoError(t, err)
 
 	priv := &jose.PrivateEcKey{}
 	priv.Crv = jose.CrvP256
