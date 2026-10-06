@@ -1,7 +1,7 @@
 github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc5 h1:5HCQTK32q6j6mEhNPM1Bs2JcCUTf3xfzjQPT0J/Tjd4=
 github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc5/go.mod h1:FlYkHH+Mjp07vvAIIXt37WgmbWEXJs3JkaP6hpip6AA=
-github.com/eclipse-keypont/pkcs11-go v1.1.1 h1:H+iaklXAyxAKFgrFubPn96fOi0pLwOvzwkHaY52agAc=
-github.com/eclipse-keypont/pkcs11-go v1.1.1/go.mod h1:vKJUVbufxP1lbfjtCSTjtaQma9yNwshvasBOeF7KKPE=
+github.com/eclipse-keypont/pkcs11-go v1.2.0-rc2 h1:2attDd9I5fyffRAn/a1f1XqHM4aEVFGnrjImfVtoshU=
+github.com/eclipse-keypont/pkcs11-go v1.2.0-rc2/go.mod h1:vKJUVbufxP1lbfjtCSTjtaQma9yNwshvasBOeF7KKPE=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/stretchr/objx v0.5.3 h1:jmXUvGomnU1o3W/V5h2VEradbpJDwGrzugQQvL0POH4=

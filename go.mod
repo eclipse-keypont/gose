@@ -11,7 +11,7 @@ require (
 )
 
 require (
-	github.com/eclipse-keypont/pkcs11-go v1.1.1 // indirect
+	github.com/eclipse-keypont/pkcs11-go v1.2.0-rc2 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 )
