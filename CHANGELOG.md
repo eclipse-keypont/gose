@@ -50,6 +50,12 @@ second major version onward).
   any `hash.Hash`, so `sha256.New()` — an unkeyed digest anyone can recompute — could be installed
   where a keyed MAC is required, authenticating nothing. It now requires a `crypto/hmac` MAC and
   panics on anything else.
+- **The shared HMAC secret can now be released** (CWE-226). `HmacKey` gains `Destroy`, implemented by
+  `HmacShaCryptor`: it drops the keyed MAC and marks the cryptor unusable, so a caller that is done
+  with a key can make its material unreachable instead of leaving it live for the process lifetime.
+  `crypto/hmac` keeps the key in an internal, unexported state that cannot be zeroized in place, so
+  `Destroy` drops the reference rather than overwriting it; a later `Hash` panics. It is idempotent.
+  This is a breaking interface change for any out-of-tree `HmacKey` implementation.
 - **`TrustKeyStoreImpl.Remove` did not invalidate an already-returned verifier.** Deleting the map
   entry left a `VerificationKey` handed out earlier holding its own copy of the key material, so a
   revoked key kept verifying. Removals are now recorded and `Get` treats a removed key as unknown.

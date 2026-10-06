@@ -27,6 +27,10 @@ type HmacShaCryptor struct {
 	// taking the process down.
 	mu   sync.Mutex
 	hash hash.Hash
+	// destroyed records that Destroy has been called. crypto/hmac keeps the key
+	// in an internal, unexported state that cannot be zeroized in place, so
+	// Destroy drops the reference and refuses further use instead.
+	destroyed bool
 }
 
 // Kid returns the identity of the key.
@@ -40,11 +44,27 @@ func (h *HmacShaCryptor) Kid() string {
 func (h *HmacShaCryptor) Hash(input []byte) []byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.destroyed {
+		panic("gose: Hash called on a destroyed HmacShaCryptor")
+	}
 	h.hash.Reset()
 	if _, err := h.hash.Write(input); err != nil {
 		panic(err)
 	}
 	return h.hash.Sum(nil)
+}
+
+// Destroy releases the keyed MAC held by the cryptor. crypto/hmac keeps the key
+// in an internal, unexported state that cannot be zeroized in place, so Destroy
+// drops the reference — making the key material unreachable and eligible for
+// collection — and marks the cryptor unusable; a later Hash panics. It is
+// idempotent and safe to call concurrently with Hash, but must not be called
+// while an operation is in flight.
+func (h *HmacShaCryptor) Destroy() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.destroyed = true
+	h.hash = nil
 }
 
 // isHmac reports whether h is a keyed MAC from crypto/hmac rather than a bare digest.

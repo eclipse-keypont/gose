@@ -272,6 +272,20 @@ func TestNewHmacShaCryptorRejectsBareDigest(t *testing.T) {
 	require.NotPanics(t, func() { NewHmacShaCryptor("k", hmac.New(sha256.New, []byte("key"))) })
 }
 
+// G18: the long-lived shared HMAC secret had no way to be released. Destroy drops
+// the keyed MAC and refuses further use, so a caller that is done with a key can
+// make its material unreachable instead of leaving it live for the process lifetime.
+func TestHmacShaCryptorDestroy(t *testing.T) {
+	cryptor := NewHmacShaCryptor("hmac-destroy", hmac.New(sha256.New, []byte("key")))
+	require.NotPanics(t, func() { cryptor.Hash([]byte("message")) })
+	cryptor.Destroy()
+	// Destroy is idempotent.
+	require.NotPanics(t, cryptor.Destroy)
+	// A destroyed cryptor must not silently produce a MAC.
+	assert.Panics(t, func() { cryptor.Hash([]byte("message")) },
+		"Hash on a destroyed cryptor must panic rather than return a MAC")
+}
+
 // RsaPublicKeyImpl.Verify fell through to VerifyPKCS1v15 for any non-PSS alg, so a key
 // labelled RSA-OAEP — which NewRsaPublicKeyImpl admits — verified PKCS#1 v1.5 signatures
 // under an algorithm it does not name.
