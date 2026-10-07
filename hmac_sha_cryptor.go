@@ -67,12 +67,31 @@ func (h *HmacShaCryptor) Destroy() {
 	h.hash = nil
 }
 
-// isHmac reports whether h is a keyed MAC from crypto/hmac rather than a bare digest.
-// crypto/hmac's concrete type is unexported, so its name and package are the only way to
-// tell the two apart without changing the constructor's signature. Since Go 1.24
-// crypto/hmac is a thin wrapper over crypto/internal/fips140/hmac, so the package path is
-// matched loosely rather than against "crypto/hmac" exactly.
+// KeyedHash is a hash.Hash that is a keyed MAC (HMAC) rather than a bare digest.
+//
+// crypto/hmac's concrete type is unexported, so a keyed MAC cannot be recognised
+// by type assertion alone. A keyed MAC implemented outside crypto/hmac — for
+// example an HSM-backed HMAC — opts in by implementing this interface, which lets
+// NewHmacShaCryptor accept it while still rejecting an unkeyed digest such as
+// sha256.New(). The interface is structural: an implementation satisfies it
+// without importing gose.
+type KeyedHash interface {
+	hash.Hash
+	// IsKeyedHash marks the implementation as a keyed MAC. It carries no
+	// behaviour; it exists only to make keyed-ness explicit and checkable.
+	IsKeyedHash()
+}
+
+// isHmac reports whether h is a keyed MAC rather than a bare digest.
+//
+// A keyed MAC is recognised either by the explicit KeyedHash opt-in, or — for
+// crypto/hmac, whose concrete type is unexported — by its name and package. Since
+// Go 1.24 crypto/hmac is a thin wrapper over crypto/internal/fips140/hmac, so the
+// package path is matched loosely rather than against "crypto/hmac" exactly.
 func isHmac(h hash.Hash) bool {
+	if _, ok := h.(KeyedHash); ok {
+		return true
+	}
 	t := reflect.TypeOf(h)
 	if t == nil {
 		return false
@@ -86,13 +105,14 @@ func isHmac(h hash.Hash) bool {
 // NewHmacShaCryptor create a new instance of an HmacShaCryptor from the supplied parameters.
 // It implements HmacKey.
 //
-// hash must be a keyed MAC (crypto/hmac), not a bare digest. HmacShaCryptor.Hash is used
-// as the JWE authentication tag, and a bare digest is unkeyed — anyone can recompute it,
-// so it authenticates nothing. A non-HMAC hash.Hash is rejected rather than silently used
-// as an authentication tag.
+// hash must be a keyed MAC, not a bare digest: either a crypto/hmac MAC or a type
+// implementing KeyedHash (for example an HSM-backed HMAC). HmacShaCryptor.Hash is
+// used as the JWE authentication tag, and a bare digest is unkeyed — anyone can
+// recompute it, so it authenticates nothing. A non-HMAC hash.Hash is rejected
+// rather than silently used as an authentication tag.
 func NewHmacShaCryptor(kid string, hash hash.Hash) HmacKey {
 	if !isHmac(hash) {
-		panic(fmt.Sprintf("gose: NewHmacShaCryptor requires a crypto/hmac MAC, got %T", hash))
+		panic(fmt.Sprintf("gose: NewHmacShaCryptor requires a keyed MAC (crypto/hmac or gose.KeyedHash), got %T", hash))
 	}
 	return &HmacShaCryptor{
 		kid:  kid,
