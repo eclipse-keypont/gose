@@ -15,7 +15,7 @@ import (
 
 func TestHmacShaCryptor(t *testing.T) {
 	kid := "hmac-0"
-	cryptor := NewHmacShaCryptor(kid, sha256.New())
+	cryptor := NewHmacShaCryptor(kid, hmac.New(sha256.New, []byte("key")))
 	t.Run("testHmacKid", func(t *testing.T) {
 		testHmacKid(t, cryptor, kid)
 	})

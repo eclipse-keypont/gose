@@ -37,6 +37,55 @@ second major version onward).
 
 ### Fixed
 
+- **`NewRsaPublicKeyImpl` rejected every RSA key.** It asserted `LoadPublicKey`'s result to the
+  value type `rsa.PublicKey`, but `LoadPublicKey` returns a `*rsa.PublicKey`, so the assertion
+  always failed and the constructor returned `ErrInvalidKeyType` for any RSA JWK.
+- **A key labelled `RSA-OAEP` verified PKCS#1 v1.5 signatures.** `RsaPublicKeyImpl.Verify` fell
+  through to `rsa.VerifyPKCS1v15` for any algorithm that was not in the PSS set, and
+  `NewRsaPublicKeyImpl` admits the RSAES-OAEP algorithms, so a verification key whose `alg` named
+  an encryption algorithm accepted signatures under an algorithm it does not name. The algorithm's
+  options are now resolved through a checked lookup and a key whose `alg` is not an RSA signature
+  algorithm verifies nothing.
+- **`NewHmacShaCryptor` accepted a bare digest as the JWE authentication tag.** The constructor took
+  any `hash.Hash`, so `sha256.New()` — an unkeyed digest anyone can recompute — could be installed
+  where a keyed MAC is required, authenticating nothing. It now requires a `crypto/hmac` MAC and
+  panics on anything else.
+- **The shared HMAC secret can now be released** (CWE-226). `HmacKey` gains `Destroy`, implemented by
+  `HmacShaCryptor`: it drops the keyed MAC and marks the cryptor unusable, so a caller that is done
+  with a key can make its material unreachable instead of leaving it live for the process lifetime.
+  `crypto/hmac` keeps the key in an internal, unexported state that cannot be zeroized in place, so
+  `Destroy` drops the reference rather than overwriting it; a later `Hash` panics. It is idempotent.
+  This is a breaking interface change for any out-of-tree `HmacKey` implementation.
+- **`TrustKeyStoreImpl.Remove` did not invalidate an already-returned verifier.** Deleting the map
+  entry left a `VerificationKey` handed out earlier holding its own copy of the key material, so a
+  revoked key kept verifying. Removals are now recorded and `Get` treats a removed key as unknown.
+- **Key objects no longer read their authorization policy or algorithm from the mutable JWK.**
+  `SigningKeyImpl`, `ECDSASigningKey`, `RsaPrivateKeyImpl`, `RsaPublicKeyImpl` and
+  `ECVerificationKeyImpl` called `jwk.Ops()`/`jwk.Alg()` on every operation, and `AesGcmCryptor`
+  aliased the caller's `key_ops` slice. A caller holding the JWK — or the slice it was built from —
+  could widen `key_ops` or relabel `alg` after construction and turn a sign-only key into a signing
+  oracle, or change the digest and signature scheme in use (CWE-471, mutable JWK metadata). The
+  policy and algorithm are now captured and cloned at construction, and `Operations()` returns a
+  copy. The key generators clone the caller-supplied `operations` slice for the same reason, and
+  `RsaPrivateKeyImpl.publicKey` clones the RSA modulus rather than sharing the `*big.Int` with the
+  private key (CWE-347).
+- **A JWT with no `exp` no longer lives forever.** `jose.Jwt.Unmarshal` defaulted a missing
+  `Expiration` to `math.MaxInt64`, so the verifier's `Expiration <= now` check could never fail and
+  a token without an expiry was accepted indefinitely (CWE-613/CWE-1188). The default is removed;
+  a zero `Expiration` is in the past and the verifier rejects the token with `ErrInvalidJwtTimeframe`.
+- **A compact JWE's protected header is validated at parse time.** `JweRfc7516Compact.Unmarshal`
+  parsed `alg`/`enc` and handed them to consumers unchecked. RFC 7516 §4.1.1/§4.1.2 require both,
+  and a header naming an algorithm gose cannot perform must not be acted on, so an absent or
+  unsupported `alg`/`enc` is now rejected with `jose.ErrInvalidAlgorithm`/`jose.ErrInvalidEncryption`
+  (CWE-807).
+- **`PublicFromPrivate` derives an EC public point from `d`.** It copied the private JWK's `x`/`y`
+  members, so a JWK whose `x`/`y` disagreed with `d` produced a public key unrelated to the private
+  key it came from (CWE-325). The point is now computed with `ScalarBaseMult` and `crv` is set from
+  the curve.
+- **The direct-AEAD encryptor checks the backend tag length before trimming the external IV.** With
+  an externally-generated IV the nonce is appended to the tag and then sliced off; a backend
+  returning a tag shorter than the nonce made the slice expressions panic (CWE-248). The length is
+  checked first and `ErrInvalidAuthenticationTag` is returned.
 - **Concurrent use of one `HmacShaCryptor` crashed the process.** `Hash` ran `Reset`/`Write`/`Sum`
   on a shared `hash.Hash` with no lock. The same instance is deliberately shared between an
   encryptor and a verifier, and a server hands it to every request goroutine, so two callers
@@ -111,6 +160,26 @@ second major version onward).
   `.` separators could cause excessive memory use via unbounded `strings.Split`; the internal JWKS
   fetcher also gained a request timeout instead of relying on the Go default HTTP client's
   unbounded one.
+- **Parser input bounds.** Every parser decoded attacker-supplied bytes before it could decide the
+  input was invalid, so a single document could force an allocation proportional to its own size.
+  `jose.MaxCompactSize` (1 MiB) now bounds a compact JWS/JWE/JWT before it is split and decoded
+  (`jose.Jws.Unmarshal`, `jose.Jwe.Unmarshal`, `jose.JweRfc7516Compact.Unmarshal`), `jose.MaxJwksSize`
+  (1 MiB) bounds a JWKS body and a JWK read through `jose.UnmarshalJwk`, and `jose.MaxBlobSize`
+  (64 KiB) bounds a single base64url member — an RSA modulus, a symmetric key, an `x5c` certificate —
+  in `unmarshalJSONBlob`, the one choke point they all pass through. The `gose` entry points that
+  parse a compact string (`JwtVerifierImpl.Verify`, all three JWE decryptors) apply the same bound.
+  Oversized input returns `ErrInputTooLarge` / `jose.ErrInputTooLarge`.
+- **Undersized RSA keys are refused on import** (RFC 7518 §3.5). `LoadPublicKey` and `LoadPrivateKey`
+  accepted any modulus, so a 1024-bit key from a JWK was used for verification, signing and
+  decryption. Both now require at least `MinRsaModulusBits` (2048) and return `ErrInvalidKeySize`.
+- **`NewTrustKeyStoreFromFile` bounds the file it reads.** It used `os.ReadFile`, which allocates
+  whatever size the file reports; it now stats the file and rejects anything over `MaxKeyFileSize`
+  (1 MiB) with `ErrInputTooLarge` before reading.
+- **The CBC and GCM cryptors bound their allocations.** `AesCbcCryptor.trimSize` padded the input
+  into a buffer larger than the input itself, and `Seal`/`Open` sized their destination from the
+  input, with no bound; `AesGcmCryptor.Open` copied the attacker-supplied ciphertext into a fresh
+  buffer before authenticating it. All now reject input over `MaxPlaintextSize` (64 MiB) —
+  `ErrInputTooLarge` where the method returns an error, nil where the interface has no error return.
 
 ### Added
 

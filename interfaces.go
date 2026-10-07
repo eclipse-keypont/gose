@@ -120,6 +120,11 @@ type HmacKey interface {
 	Key
 	// Hash method gets bytes as input and sum it all to return a hashed result in a 32 bytes array
 	Hash(input []byte) []byte
+	// Destroy releases the key material held by the MAC. crypto/hmac keeps the
+	// key in an internal, unexported state that cannot be zeroized in place, so
+	// Destroy drops the reference and marks the key unusable; a later Hash
+	// panics. It is idempotent.
+	Destroy()
 }
 
 // JwtSigner implements generation of signed compact JWTs as defined by https://tools.ietf.org/html/rfc7519.

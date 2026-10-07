@@ -4,7 +4,10 @@
 package gose
 
 import (
+	"fmt"
 	"hash"
+	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -24,6 +27,10 @@ type HmacShaCryptor struct {
 	// taking the process down.
 	mu   sync.Mutex
 	hash hash.Hash
+	// destroyed records that Destroy has been called. crypto/hmac keeps the key
+	// in an internal, unexported state that cannot be zeroized in place, so
+	// Destroy drops the reference and refuses further use instead.
+	destroyed bool
 }
 
 // Kid returns the identity of the key.
@@ -37,6 +44,9 @@ func (h *HmacShaCryptor) Kid() string {
 func (h *HmacShaCryptor) Hash(input []byte) []byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.destroyed {
+		panic("gose: Hash called on a destroyed HmacShaCryptor")
+	}
 	h.hash.Reset()
 	if _, err := h.hash.Write(input); err != nil {
 		panic(err)
@@ -44,9 +54,46 @@ func (h *HmacShaCryptor) Hash(input []byte) []byte {
 	return h.hash.Sum(nil)
 }
 
+// Destroy releases the keyed MAC held by the cryptor. crypto/hmac keeps the key
+// in an internal, unexported state that cannot be zeroized in place, so Destroy
+// drops the reference — making the key material unreachable and eligible for
+// collection — and marks the cryptor unusable; a later Hash panics. It is
+// idempotent and safe to call concurrently with Hash, but must not be called
+// while an operation is in flight.
+func (h *HmacShaCryptor) Destroy() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.destroyed = true
+	h.hash = nil
+}
+
+// isHmac reports whether h is a keyed MAC from crypto/hmac rather than a bare digest.
+// crypto/hmac's concrete type is unexported, so its name and package are the only way to
+// tell the two apart without changing the constructor's signature. Since Go 1.24
+// crypto/hmac is a thin wrapper over crypto/internal/fips140/hmac, so the package path is
+// matched loosely rather than against "crypto/hmac" exactly.
+func isHmac(h hash.Hash) bool {
+	t := reflect.TypeOf(h)
+	if t == nil {
+		return false
+	}
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Name() == "HMAC" && strings.Contains(t.PkgPath(), "hmac")
+}
+
 // NewHmacShaCryptor create a new instance of an HmacShaCryptor from the supplied parameters.
-// It implements HmacKey
+// It implements HmacKey.
+//
+// hash must be a keyed MAC (crypto/hmac), not a bare digest. HmacShaCryptor.Hash is used
+// as the JWE authentication tag, and a bare digest is unkeyed — anyone can recompute it,
+// so it authenticates nothing. A non-HMAC hash.Hash is rejected rather than silently used
+// as an authentication tag.
 func NewHmacShaCryptor(kid string, hash hash.Hash) HmacKey {
+	if !isHmac(hash) {
+		panic(fmt.Sprintf("gose: NewHmacShaCryptor requires a crypto/hmac MAC, got %T", hash))
+	}
 	return &HmacShaCryptor{
 		kid:  kid,
 		hash: hash,

@@ -49,4 +49,8 @@ var (
 	ErrInvalidAlgorithm                  error = &InvalidFormat{"invalid algorithm"}
 	ErrInvalidEncryption                 error = &InvalidFormat{"invalid encryption"}
 	ErrZipCompressionNotSupported        error = &InvalidFormat{"zip compression not supported"}
+
+	// ErrInputTooLarge is returned when a document, file or ciphertext exceeds the
+	// parser bound. See the Max* constants in this package and in the jose package.
+	ErrInputTooLarge = errors.New("input exceeds maximum permitted size")
 )

@@ -6,6 +6,7 @@ package gose
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,9 @@ func Test_JwtGenerateVerify(t *testing.T) {
 		claims := jose.SettableJwtClaims{
 			Audiences: jose.Audiences{Aud: []string{"audience"}},
 			Subject:   "subject",
+			// A token without "exp" is now rejected by the verifier, so the round-trip
+			// test must carry a real expiry.
+			Expiration: time.Now().Add(time.Hour).Unix(),
 		}
 
 		untyped := map[string]interface{}{

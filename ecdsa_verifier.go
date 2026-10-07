@@ -19,13 +19,18 @@ import (
 type ECVerificationKeyImpl struct {
 	key ecdsa.PublicKey
 	jwk jose.Jwk
+	// ops and alg capture the authorization policy and algorithm at construction
+	// time so later mutation of the source JWK cannot alter this key's behaviour
+	// (M-G2/M-G3).
+	ops []jose.KeyOps
+	alg jose.Alg
 }
 
 const ecPublicKeyPemType = "EC PUBLIC KEY"
 
 // Algorithm return algorithm
 func (verifier *ECVerificationKeyImpl) Algorithm() jose.Alg {
-	return verifier.jwk.Alg()
+	return verifier.alg
 }
 
 // Verify signed data matches signature and jwk
@@ -33,14 +38,14 @@ func (verifier *ECVerificationKeyImpl) Algorithm() jose.Alg {
 // The serialization format is chosen instead to match that defined in the JSON Web Signature spec
 // https://tools.ietf.org/html/rfc7515#appendix-A.3.1.
 func (verifier *ECVerificationKeyImpl) Verify(operation jose.KeyOps, data []byte, signature []byte) bool {
-	ops := intersection(validVerificationOps, verifier.jwk.Ops())
+	ops := intersection(validVerificationOps, verifier.ops)
 	if !isSubset(ops, []jose.KeyOps{operation}) {
 		return false
 	}
 
 	// Get the key
 	ecdsaKey := verifier.key
-	opts := algToOptsMap[verifier.Algorithm()].(*ECDSAOptions)
+	opts := algToOptsMap[verifier.alg].(*ECDSAOptions)
 	keySize := opts.keySizeBytes
 	if len(signature) != 2*keySize {
 		return false

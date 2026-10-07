@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -31,6 +32,22 @@ import (
 const (
 	//Version1 of the JOSE
 	version1 = "v1"
+)
+
+// Input bounds for this package. The jose package bounds its own parsers; these cover
+// the file and ciphertext handling that lives here.
+const (
+	// MaxKeyFileSize bounds a JWK/truststore file read from disk. Key files are a few
+	// kilobytes; the cap stops a huge or special file from being read into memory.
+	MaxKeyFileSize = 1 << 20 // 1 MiB
+	// MaxPlaintextSize bounds a plaintext handed to the CBC cryptor. The cryptor pads
+	// to a block boundary, so an oversized input would otherwise be copied into a
+	// buffer larger than the input itself.
+	MaxPlaintextSize = 1 << 26 // 64 MiB
+	// MinRsaModulusBits is the smallest RSA modulus accepted on import. RFC 7518 §3.5
+	// requires at least 2048 bits; a smaller key is not a key we should sign or decrypt
+	// with, and accepting one silently weakens every operation that uses it.
+	MinRsaModulusBits = 2048
 )
 
 func fromBase64(b64 string) (*big.Int, error) {
@@ -70,6 +87,19 @@ func intersection(first []jose.KeyOps, second []jose.KeyOps) []jose.KeyOps {
 	return result
 }
 
+// cloneOps returns a copy of ops. Key types capture their key_ops at construction and
+// must not alias the caller's slice: a JWK's Ops() returns the backing slice, so a
+// caller that later mutates it would otherwise change the key's authorization policy
+// (CWE-471, mutable JWK metadata).
+func cloneOps(ops []jose.KeyOps) []jose.KeyOps {
+	if ops == nil {
+		return nil
+	}
+	out := make([]jose.KeyOps, len(ops))
+	copy(out, ops)
+	return out
+}
+
 // ecdsaCurveForAlg resolves the elliptic curve for an EC JWK's "alg".
 //
 // A JWK's Go type is chosen from "kty" alone and is never cross-validated against
@@ -83,6 +113,49 @@ func ecdsaCurveForAlg(alg jose.Alg) (elliptic.Curve, error) {
 		return nil, ErrInvalidKeyType
 	}
 	return opts.curve, nil
+}
+
+// ecdhCurveFor maps an elliptic.Curve to its crypto/ecdh counterpart. Deriving a
+// public point through crypto/ecdh avoids the deprecated and non-constant-time
+// elliptic.Curve.ScalarBaseMult.
+func ecdhCurveFor(curve elliptic.Curve) (ecdh.Curve, error) {
+	switch curve {
+	case elliptic.P256():
+		return ecdh.P256(), nil
+	case elliptic.P384():
+		return ecdh.P384(), nil
+	case elliptic.P521():
+		return ecdh.P521(), nil
+	default:
+		return nil, ErrInvalidKeyType
+	}
+}
+
+// ecPointFromScalar derives the public point (x, y) for the private scalar d on
+// the given curve. The scalar is reduced modulo the group order and left-padded
+// to the curve's byte size, as crypto/ecdh requires.
+func ecPointFromScalar(curve elliptic.Curve, d *big.Int) (x, y *big.Int, err error) {
+	ecdhCurve, err := ecdhCurveFor(curve)
+	if err != nil {
+		return nil, nil, err
+	}
+	scalar := new(big.Int).Mod(d, curve.Params().N)
+	if scalar.Sign() == 0 {
+		return nil, nil, ErrInvalidKeyType
+	}
+	size := (curve.Params().BitSize + 7) / 8
+	priv, err := ecdhCurve.NewPrivateKey(scalar.FillBytes(make([]byte, size)))
+	if err != nil {
+		return nil, nil, err
+	}
+	// PublicKey().Bytes() is the uncompressed point: 0x04 || X || Y.
+	pub := priv.PublicKey().Bytes()
+	if len(pub) != 1+2*size {
+		return nil, nil, ErrInvalidKeyType
+	}
+	x = new(big.Int).SetBytes(pub[1 : 1+size])
+	y = new(big.Int).SetBytes(pub[1+size:])
+	return x, y, nil
 }
 
 // LoadPrivateKey loads the jwk into a crypto.Signer for performing signing operations
@@ -119,6 +192,12 @@ func LoadPrivateKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.Signer, error)
 		/* Ensure positive 32-bit integer. */
 		if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 			return nil, ErrInvalidExponent
+		}
+		// RFC 7518 §3.5: an RSA key must be at least 2048 bits. Without this an
+		// undersized modulus imported from a JWK was accepted and used for signing and
+		// decryption, silently weakening every operation that relied on it.
+		if v.N.Int().BitLen() < MinRsaModulusBits {
+			return nil, ErrInvalidKeySize
 		}
 		// RFC 7518 §6.3.2 makes the CRT parameters all-or-nothing, and crypto/rsa needs
 		// the primes. A missing or degenerate prime (0, 1, or one that does not divide N)
@@ -196,6 +275,10 @@ func LoadPublicKey(jwk jose.Jwk, required []jose.KeyOps) (crypto.PublicKey, erro
 		/* Ensure positive 32-bit integer. */
 		if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 			return nil, ErrInvalidExponent
+		}
+		// RFC 7518 §3.5: an RSA key must be at least 2048 bits. See LoadPrivateKey.
+		if v.N.Int().BitLen() < MinRsaModulusBits {
+			return nil, ErrInvalidKeySize
 		}
 		key.E = int(v.E.Int().Int64())
 		key.N = v.N.Int()
@@ -384,8 +467,25 @@ func PublicFromPrivate(in jose.Jwk) (jose.Jwk, error) {
 		result.PublicRsaKeyFields = k.PublicRsaKeyFields
 		out = &result
 	case *jose.PrivateEcKey:
+		// Derive the public point from the private scalar rather than copying the "x"/"y"
+		// members. A JWK whose "x"/"y" disagree with "d" would otherwise yield a public key
+		// that does not correspond to the private key it was derived from (CWE-325).
+		curve, err := ecdsaCurveForAlg(k.Alg())
+		if err != nil {
+			return nil, err
+		}
+		if k.D.Empty() {
+			return nil, ErrInvalidKeyType
+		}
+		x, y, err := ecPointFromScalar(curve, k.D.Int())
+		if err != nil {
+			return nil, err
+		}
 		var result jose.PublicEcKey
 		result.PublicEcKeyFields = k.PublicEcKeyFields
+		result.X.Set(x)
+		result.Y.Set(y)
+		result.Crv = jose.Crv(curve.Params().Name)
 		out = &result
 	default:
 		return nil, ErrUnsupportedKeyType

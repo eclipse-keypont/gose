@@ -148,6 +148,23 @@ const (
 	DeflateZip Zip = "DEF"
 )
 
+// Parser input bounds. Every parser in this package is reachable with attacker-supplied
+// bytes — a compact JWS/JWE/JWT off the wire, a JWKS body from a remote endpoint, a JWK
+// file — and each one decodes before it can decide the input is invalid. Without a cap a
+// single document can force an allocation proportional to its own size, so these bound
+// the work a hostile input can demand.
+const (
+	// MaxCompactSize bounds a compact JWS/JWE/JWT string before it is split and decoded.
+	// Real tokens are a few kilobytes; 1 MiB is far above any legitimate token.
+	MaxCompactSize = 1 << 20 // 1 MiB
+	// MaxJwksSize bounds a JWKS document (and a single JWK read through UnmarshalJwk).
+	MaxJwksSize = 1 << 20 // 1 MiB
+	// MaxBlobSize bounds a single base64url-encoded JWK member (BigNum, Blob, x5c
+	// certificate) after decoding. A 16384-bit RSA modulus is 2 KiB, so 64 KiB is
+	// generous while still stopping an oversized big.Int from being materialised.
+	MaxBlobSize = 1 << 16 // 64 KiB
+)
+
 var (
 	//ErrJSONFormat when bad JSON string provided
 	ErrJSONFormat = errors.New("invalid JSON format")
@@ -175,6 +192,11 @@ var (
 	//ErrJweFormat when a JWE isn't formatted correctly
 	ErrJweFormat = errors.New("invalid JWE format")
 
+	//ErrInvalidAlgorithm when a JWE/JWS header names an algorithm gose does not support
+	ErrInvalidAlgorithm = errors.New("invalid algorithm")
+	//ErrInvalidEncryption when a JWE header names an encryption gose does not support
+	ErrInvalidEncryption = errors.New("invalid encryption")
+
 	//ErrTooManyKeyOps when a JWK declares more key_ops entries than can plausibly be
 	//meaningful. RFC 7517 §4.3 defines a small fixed set; a document carrying thousands
 	//is malformed, and bounding it keeps key_ops validation cheap.
@@ -184,6 +206,10 @@ var (
 	//implements no JWS header extensions, so RFC 7515 §4.1.11 requires rejecting any
 	//token that marks extensions as critical.
 	ErrCritHeaderNotSupported = errors.New("unsupported critical header parameter")
+
+	//ErrInputTooLarge when a document or member exceeds the parser bound (MaxCompactSize,
+	//MaxJwksSize, MaxBlobSize). See those constants for why the bounds exist.
+	ErrInputTooLarge = errors.New("input exceeds maximum permitted size")
 )
 
 func unmarshalJSONBlob(src []byte, decoder *base64.Encoding) (dst []byte, err error) {
@@ -191,6 +217,14 @@ func unmarshalJSONBlob(src []byte, decoder *base64.Encoding) (dst []byte, err er
 	// We always want at least 1 character pre and proceeded by a quote.
 	if srcLen < 3 || src[0] != '"' || src[srcLen-1] != '"' {
 		err = ErrBlobEmpty
+		return
+	}
+	// Bound before allocating: DecodedLen is derived from the input length, so an
+	// oversized member would otherwise size the buffer. This is the single choke point
+	// for every base64url member — BigNum (n, e, d, p, q, ...), Blob (k, _thales_aad)
+	// and x5c certificates — so one check covers them all.
+	if decoder.DecodedLen(srcLen-2) > MaxBlobSize {
+		err = ErrInputTooLarge
 		return
 	}
 	// Allocate (possibly over allocate) our dst buffer.

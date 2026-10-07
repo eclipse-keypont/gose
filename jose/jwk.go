@@ -548,8 +548,15 @@ func UnmarshalJwk(reader io.ReadSeeker) (jwk Jwk, err error) {
 	// buffer, so a stream holding two JSON objects dispatched on the first object's "kty"
 	// and then decoded the *second* object. json.Unmarshal also rejects anything after the
 	// first value, which a JWK never legitimately has.
+	//
+	// The read is bounded: the reader may be a file or a network stream, and io.ReadAll
+	// would otherwise grow the buffer to whatever the source supplies.
 	var src []byte
-	if src, err = io.ReadAll(reader); err != nil {
+	if src, err = io.ReadAll(io.LimitReader(reader, MaxJwksSize+1)); err != nil {
+		return
+	}
+	if len(src) > MaxJwksSize {
+		err = ErrInputTooLarge
 		return
 	}
 	// First unmarshal Kty so that we can work out how to proceed.

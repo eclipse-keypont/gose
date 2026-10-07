@@ -50,6 +50,12 @@ func (cryptor *AesGcmCryptor) Open(operation jose.KeyOps, nonce, ciphertext, aad
 		err = ErrInvalidOperations
 		return
 	}
+	// Bound before allocating: the ciphertext is attacker-supplied and the copies below
+	// are sized from it, so an oversized input would allocate before authentication.
+	if len(ciphertext) > MaxPlaintextSize {
+		err = ErrInputTooLarge
+		return
+	}
 	// The nonce comes straight off the wire on the decryption path. cipher.AEAD.Open
 	// panics rather than erroring on a wrong-sized nonce, so check it here as Seal does.
 	if len(nonce) != cryptor.aead.NonceSize() {
@@ -78,6 +84,11 @@ func (cryptor *AesGcmCryptor) Seal(operation jose.KeyOps, nonce, plaintext, aad 
 	ops := intersection(validEncryptionOpts, cryptor.opts)
 	if !isSubset(ops, []jose.KeyOps{operation}) {
 		err = ErrInvalidOperations
+		return
+	}
+	// Bound before allocating: the destination is sized from the plaintext.
+	if len(plaintext) > MaxPlaintextSize {
+		err = ErrInputTooLarge
 		return
 	}
 	// If a nil nonce provided, this is interpreted as the encryptor providing the nonce
@@ -115,7 +126,9 @@ func NewAesGcmCryptorFromJwk(jwk jose.Jwk, required []jose.KeyOps) (AeadEncrypti
 		alg:  jwk.Alg(),
 		aead: aead,
 		rng:  rand.Reader,
-		opts: jwk.Ops(),
+		// Clone the JWK-owned operations slice so later mutation of the JWK
+		// cannot alter the cryptor's authorization policy (M-G4).
+		opts: cloneOps(jwk.Ops()),
 	}, nil
 }
 
@@ -126,6 +139,7 @@ func NewAesGcmCryptor(aead cipher.AEAD, rng io.Reader, kid string, alg jose.Alg,
 		alg:  alg,
 		aead: aead,
 		rng:  rng,
-		opts: operations,
+		// Clone the caller-owned operations slice (M-G4).
+		opts: cloneOps(operations),
 	}, nil
 }
