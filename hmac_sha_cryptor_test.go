@@ -6,6 +6,7 @@ package gose
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"hash"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,4 +62,27 @@ func TestHmacShaCryptor_ConcurrentHash(t *testing.T) {
 	}
 	wg.Wait()
 	require.Zero(t, mismatches.Load(), "concurrent Hash calls produced wrong MACs")
+}
+
+// keyedHashStub is a minimal keyed MAC that opts in via the KeyedHash marker,
+// standing in for an HSM-backed HMAC (e.g. crypto11's SecretKey.NewHMAC) whose
+// concrete type is not crypto/hmac's.
+type keyedHashStub struct{ hash.Hash }
+
+func (keyedHashStub) IsKeyedHash() {}
+
+// TestNewHmacShaCryptor_KeyedHashOptIn pins the fix for HSM-backed HMACs: a
+// keyed MAC that is not crypto/hmac's concrete type is accepted when it
+// implements KeyedHash, while a bare digest is still rejected.
+func TestNewHmacShaCryptor_KeyedHashOptIn(t *testing.T) {
+	t.Run("acceptsKeyedHash", func(t *testing.T) {
+		cryptor := NewHmacShaCryptor("hmac-optin", keyedHashStub{hmac.New(sha256.New, []byte("key"))})
+		require.Equal(t, "hmac-optin", cryptor.Kid())
+		require.Len(t, cryptor.Hash([]byte("hashme")), 32)
+	})
+	t.Run("rejectsBareDigest", func(t *testing.T) {
+		require.Panics(t, func() {
+			NewHmacShaCryptor("hmac-bare", sha256.New())
+		})
+	})
 }
