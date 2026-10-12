@@ -200,6 +200,10 @@ second major version onward).
   `JweRfc7516Compact`.
 - Full `golangci-lint` cleanup across the codebase (`gofmt`/`goimports` comment conventions,
   ineffassign, and related findings).
+- Build and test toolchain bumped from `go1.27.1` to `go1.27.2` (`toolchain` directive in
+  `go.mod` and `.go-version`). go1.27.2 is a patch release that fixes the `net/http` and
+  `net/http/internal/http2` standard-library vulnerabilities flagged by `govulncheck` on
+  go1.27.1.
 
 ### CI/CD & supply chain
 
