@@ -1,13 +1,26 @@
 
 # GOSE - JOSE and friends for the Go developer
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/eclipse-keypont/gose.svg)](https://pkg.go.dev/github.com/eclipse-keypont/gose)
-[![Build](https://github.com/eclipse-keypont/gose/actions/workflows/ci.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/ci.yml)
-[![Lint](https://github.com/eclipse-keypont/gose/actions/workflows/lint.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/lint.yml)
-[![Release](https://github.com/eclipse-keypont/gose/actions/workflows/release.yml/badge.svg)](https://github.com/eclipse-keypont/gose/actions/workflows/release.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/eclipse-keypont/gose/badge)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keypont/gose)
-[![GitHub release](https://img.shields.io/github/v/release/eclipse-keypont/gose)](https://github.com/eclipse-keypont/gose/releases/latest)
-[![Changelog](https://img.shields.io/badge/changelog-v0.x%20%E2%86%92%20v1.0.0-blue)](./CHANGELOG.md)
+<!-- Badges: every one is drawn by shields.io with style=flat-square, so they share a height, a
+     typeface and a corner radius. GitHub's own actions/workflows/*/badge.svg, pkg.go.dev's badge
+     and api.scorecard.dev's badge each render at their own metrics and take no style parameter,
+     which is why the shields.io equivalents are used instead. The two rows are deliberate: what
+     the project is, then whether it is healthy. The default branch here is master, so the
+     workflows that gate pushes and pull requests are pinned with branch=master; release.yml runs
+     on v* tags, so it takes no branch. Every URL in this file is an absolute eclipse-keypont one
+     on purpose, so a fork's README keeps pointing at upstream. -->
+[![Licence](https://img.shields.io/github/license/eclipse-keypont/gose?style=flat-square&logo=opensourceinitiative&logoColor=white&color=1f6feb)](./LICENSE)
+[![Go Reference](https://img.shields.io/badge/pkg.go.dev-reference-007d9c?style=flat-square&logo=go&logoColor=white)](https://pkg.go.dev/github.com/eclipse-keypont/gose)
+[![Release](https://img.shields.io/github/v/release/eclipse-keypont/gose?style=flat-square&logo=github&logoColor=white&color=1f6feb)](https://github.com/eclipse-keypont/gose/releases/latest)
+[![Changelog](https://img.shields.io/badge/changelog-v0.x%20%E2%86%92%20v1.0.0-1f6feb?style=flat-square&logo=keepachangelog&logoColor=white)](./CHANGELOG.md)
+
+[![Build](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/ci.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/eclipse-keypont/gose/actions/workflows/ci.yml)
+[![Lint](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/lint.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=lint)](https://github.com/eclipse-keypont/gose/actions/workflows/lint.yml)
+[![Vulnerability scan](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/govulncheck.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=vulnerability%20scan)](https://github.com/eclipse-keypont/gose/actions/workflows/govulncheck.yml)
+[![Security scan](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/gosec.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=security%20scan)](https://github.com/eclipse-keypont/gose/actions/workflows/gosec.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/codeql.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=codeql)](https://github.com/eclipse-keypont/gose/actions/workflows/codeql.yml)
+[![Release build](https://img.shields.io/github/actions/workflow/status/eclipse-keypont/gose/release.yml?style=flat-square&logo=githubactions&logoColor=white&label=release%20build)](https://github.com/eclipse-keypont/gose/actions/workflows/release.yml)
+[![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/eclipse-keypont/gose?style=flat-square&logo=openssf&logoColor=white&label=openssf%20scorecard)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keypont/gose)
 
 ## Overview
 
