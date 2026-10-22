@@ -3,6 +3,15 @@
 All notable changes to gose are documented in this file. For the full commit-level history see
 [GitHub Releases](https://github.com/eclipse-keypont/gose/releases).
 
+## Unreleased
+
+### Changed
+
+- Build and test toolchain bumped from `go1.27.2` to `go1.27.3` (`toolchain` directive in
+  `go.mod` and `.go-version`). go1.27.3 is a patch release that fixes the `crypto/x509`
+  standard-library vulnerability `GO-2026-6809` ("distrust compromised intermediate
+  certificates") flagged by `govulncheck` on go1.27.2.
+
 ## v1.0.0 — first stable release: pkcs11-go, crypto11/v2 and a hardened JOSE core
 
 gose has been on `v0.x` since its start, with no stability contract. v1.0.0 is its first stable
