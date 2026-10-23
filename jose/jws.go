@@ -124,12 +124,33 @@ func (jws *Jws) Unmarshal(src string) (body string, err error) {
 		return
 	}
 
-	if jws.Signature, err = base64.RawURLEncoding.DecodeString(parts[2]); err != nil {
+	// Decode the signature segment strictly. The header and payload are covered by the
+	// signature over the raw parts[0].parts[1] octets, so tampering there is caught by
+	// verification; the signature segment itself is not, so a non-canonical encoding of
+	// it (non-zero trailing bits, or a CR/LF the base64 decoder would skip) would yield a
+	// second token string carrying the same signature bytes. Reject any such encoding so a
+	// verified token has one canonical serialisation.
+	if jws.Signature, err = strictCompactB64(parts[2]); err != nil {
 		err = ErrJwtFormat
 		return
 	}
 	body = strings.Join(parts[:2], ".")
 	return
+}
+
+// strictCompactB64 decodes a raw-base64url segment and rejects any encoding that is not
+// the canonical form of the bytes it yields: re-encoding the result must reproduce the
+// input exactly. This catches non-zero trailing bits and CR/LF that encoding/base64 would
+// otherwise accept, either of which lets two distinct strings decode to the same bytes.
+func strictCompactB64(s string) ([]byte, error) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	if base64.RawURLEncoding.EncodeToString(b) != s {
+		return nil, ErrJwtFormat
+	}
+	return b, nil
 }
 
 // MarshalJws body and signature to a string
