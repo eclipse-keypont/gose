@@ -189,6 +189,13 @@ second major version onward).
   input, with no bound; `AesGcmCryptor.Open` copied the attacker-supplied ciphertext into a fresh
   buffer before authenticating it. All now reject input over `MaxPlaintextSize` (64 MiB) —
   `ErrInputTooLarge` where the method returns an error, nil where the interface has no error return.
+- **`AesGcmCryptor.Seal` returns an error instead of panicking.** `cipher.AEAD.Seal` has no error
+  return, so an HSM-backed AEAD (crypto11) panics when the token fails, and the standard library
+  panics on a nonce it cannot use (a nil nonce, which asks the AEAD to supply one). That panic went
+  through `Seal` and every JWE encryptor built on it. `Seal` now recovers it and returns
+  `ErrSealFailed`, wrapping the panic value when it is an error. It also returns `ErrSealFailed`
+  when the AEAD output is not exactly ciphertext, tag and, for a nil nonce, the supplied nonce, rather
+  than splitting a malformed buffer into the returned ciphertext and tag.
 
 ### Added
 

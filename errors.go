@@ -31,6 +31,10 @@ var (
 	//GCM errors
 	ErrInvalidNonce             = errors.New("invalid nonce")
 	ErrInvalidAuthenticationTag = errors.New("invalid authentication tag")
+	// ErrSealFailed is returned when the underlying cipher.AEAD fails to seal, either
+	// by panicking (its Seal method has no error return, so an HSM-backed AEAD reports
+	// token failures that way) or by returning output of the wrong length.
+	ErrSealFailed = errors.New("aead seal failed")
 
 	// JOSE errors
 	ErrInvalidJwsCompactEncoding         error = &InvalidFormat{"invalid jws compact encoding"}

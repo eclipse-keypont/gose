@@ -4,7 +4,10 @@
 package gose
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -162,5 +165,102 @@ func TestAesGcmCryptor_RoundTrip(t *testing.T) {
 		plaintext, err := cryptor.Open(jose.KeyOpsDecrypt, nonce, ciphertext, nil, tag)
 		assert.NoError(t, err)
 		assert.Equal(t, plaintext, toSeal)
+	}
+}
+
+// stubAEAD wraps a real AEAD and overrides Seal, standing in for an AEAD whose Seal
+// panics (as a token-backed one does on failure) or returns output of the wrong length.
+type stubAEAD struct {
+	cipher.AEAD
+	seal func(dst, nonce, plaintext, aad []byte) []byte
+}
+
+func (s stubAEAD) Seal(dst, nonce, plaintext, aad []byte) []byte {
+	return s.seal(dst, nonce, plaintext, aad)
+}
+
+func newStubCryptor(t *testing.T, seal func(dst, nonce, plaintext, aad []byte) []byte) AeadEncryptionKey {
+	t.Helper()
+	block, err := aes.NewCipher(fakeKeyMaterial)
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	cryptor, err := NewAesGcmCryptor(stubAEAD{AEAD: aead, seal: seal}, rand.Reader, "kid", jose.AlgA256GCM, []jose.KeyOps{jose.KeyOpsEncrypt})
+	require.NoError(t, err)
+	return cryptor
+}
+
+func TestAesGcmCryptor_Seal_PanicBecomesError(t *testing.T) {
+	tokenErr := errors.New("token failure")
+	for name, tc := range map[string]struct {
+		value any
+		cause error
+	}{
+		"error":  {value: tokenErr, cause: tokenErr},
+		"string": {value: "token failure"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cryptor := newStubCryptor(t, func(_, _, _, _ []byte) []byte { panic(tc.value) })
+			var (
+				ciphertext, tag []byte
+				err             error
+			)
+			require.NotPanics(t, func() {
+				ciphertext, tag, err = cryptor.Seal(jose.KeyOpsEncrypt, fakeNonce, fakePlaintext, nil)
+			})
+			assert.ErrorIs(t, err, ErrSealFailed)
+			assert.ErrorContains(t, err, "token failure")
+			if tc.cause != nil {
+				assert.ErrorIs(t, err, tc.cause)
+			}
+			assert.Nil(t, ciphertext)
+			assert.Nil(t, tag)
+		})
+	}
+}
+
+func TestAesGcmCryptor_Seal_NilNonceWithoutAEADSupport(t *testing.T) {
+	// The standard library GCM cannot supply a nonce and panics on an empty one.
+	key := &jose.OctSecretKey{}
+	key.SetAlg(jose.AlgA256GCM)
+	key.SetOps([]jose.KeyOps{jose.KeyOpsEncrypt})
+	key.K.SetBytes(fakeKeyMaterial)
+	cryptor, err := NewAesGcmCryptorFromJwk(key, []jose.KeyOps{jose.KeyOpsEncrypt})
+	require.NoError(t, err)
+
+	ciphertext, tag, err := cryptor.Seal(jose.KeyOpsEncrypt, nil, fakePlaintext, nil)
+	assert.ErrorIs(t, err, ErrSealFailed)
+	assert.Nil(t, ciphertext)
+	assert.Nil(t, tag)
+}
+
+func TestAesGcmCryptor_Seal_OutputLength(t *testing.T) {
+	const tagSize, nonceSize = 16, 12
+	for name, tc := range map[string]struct {
+		nonce  []byte
+		outLen int
+		ok     bool
+	}{
+		"short output":               {nonce: fakeNonce, outLen: len(fakePlaintext) + tagSize - 1},
+		"long output":                {nonce: fakeNonce, outLen: len(fakePlaintext) + tagSize + 1},
+		"supplied nonce missing":     {nonce: nil, outLen: len(fakePlaintext) + tagSize},
+		"supplied nonce appended":    {nonce: nil, outLen: len(fakePlaintext) + tagSize + nonceSize, ok: true},
+		"caller nonce, exact output": {nonce: fakeNonce, outLen: len(fakePlaintext) + tagSize, ok: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cryptor := newStubCryptor(t, func(dst, _, _, _ []byte) []byte {
+				return append(dst, make([]byte, tc.outLen)...)
+			})
+			ciphertext, tag, err := cryptor.Seal(jose.KeyOpsEncrypt, tc.nonce, fakePlaintext, nil)
+			if !tc.ok {
+				assert.ErrorIs(t, err, ErrSealFailed)
+				assert.Nil(t, ciphertext)
+				assert.Nil(t, tag)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, ciphertext, len(fakePlaintext))
+			assert.Len(t, tag, tc.outLen-len(fakePlaintext))
+		})
 	}
 }

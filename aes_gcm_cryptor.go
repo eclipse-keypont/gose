@@ -6,6 +6,7 @@ package gose
 import (
 	"crypto/cipher"
 	"crypto/rand"
+	"fmt"
 	"io"
 
 	"github.com/eclipse-keypont/gose/jose"
@@ -102,11 +103,36 @@ func (cryptor *AesGcmCryptor) Seal(operation jose.KeyOps, nonce, plaintext, aad 
 		sz += cryptor.aead.NonceSize()
 	}
 	dst := make([]byte, 0, sz)
-	dst = cryptor.aead.Seal(dst, nonce, plaintext, aad)
+	if dst, err = sealAEAD(cryptor.aead, dst, nonce, plaintext, aad); err != nil {
+		return
+	}
+	// The output must hold the ciphertext, the tag and, when the AEAD supplied the nonce,
+	// the nonce. Anything else cannot be split into the values returned below.
+	if len(dst) != sz {
+		err = ErrSealFailed
+		return
+	}
 	ciphertext = dst[:len(plaintext)]
 	// If the HSM is supplying the IV appended to the end, we return this contained in the tag and extract later
 	tag = dst[len(plaintext):]
 	return
+}
+
+// sealAEAD calls aead.Seal and turns a panic into ErrSealFailed. cipher.AEAD.Seal has no
+// error return, so an AEAD backed by a token (crypto11) panics when the token fails, and
+// the standard library panics on a wrong-sized nonce.
+func sealAEAD(aead cipher.AEAD, dst, nonce, plaintext, aad []byte) (out []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			if e, ok := r.(error); ok {
+				err = fmt.Errorf("%w: %w", ErrSealFailed, e)
+			} else {
+				err = fmt.Errorf("%w: %v", ErrSealFailed, r)
+			}
+		}
+	}()
+	return aead.Seal(dst, nonce, plaintext, aad), nil
 }
 
 // NewAesGcmCryptorFromJwk create a new instance of an AesGCmCryptor from a JWK.
