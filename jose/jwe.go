@@ -207,6 +207,12 @@ func (jwe *Jwe) Unmarshal(src string) (err error) {
 	if err = json.Unmarshal(jwe.MarshalledHeader, &jwe.Header); err != nil {
 		return
 	}
+	// RFC 7516 §4.1.13: a non-empty "crit" lists extensions the recipient must understand.
+	// gose implements none, so the JWE cannot be honoured and is rejected (as jwt.Verify does).
+	if len(jwe.Header.Crit) > 0 {
+		err = ErrCritHeaderNotSupported
+		return
+	}
 	jwe.MarshalledHeader = []byte(parts[0])
 	// JWE Encrypted key can be a zero length key in scenarios such as direct encoding.
 	if len(parts[1]) > 0 {
@@ -251,6 +257,12 @@ func (jwe *JweRfc7516Compact) Unmarshal(src string) (err error) {
 		return
 	}
 	if err = json.Unmarshal(marshalledHeader, &jwe.ProtectedHeader); err != nil {
+		return
+	}
+	// RFC 7516 §4.1.13: a non-empty "crit" lists extensions the recipient must understand.
+	// gose implements none, so the JWE cannot be honoured and is rejected (as jwt.Verify does).
+	if len(jwe.ProtectedHeader.Crit) > 0 {
+		err = ErrCritHeaderNotSupported
 		return
 	}
 	// RFC 7516 §4.1.1 and §4.1.2 require "alg" and "enc" to be present, and a header
