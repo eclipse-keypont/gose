@@ -5,9 +5,12 @@ package gose
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/eclipse-keypont/gose/jose"
 )
@@ -124,15 +127,16 @@ func TestRemoveNoKey(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	// Setup
-	keys := map[string]jose.Jwk{
-		"issuer": &jose.PublicRsaKey{},
-	}
-	for _, key := range keys {
-		key.SetKid("123456")
-		key.SetAlg(jose.AlgRS512)
-		key.SetOps(validVerificationOps)
-	}
+	// Setup: a real RSA public key, since Get now resolves it through NewVerificationKey,
+	// which validates the modulus and exponent.
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwk, err := JwkFromPublicKey(rsaKey.Public(), validVerificationOps, nil)
+	require.NoError(t, err)
+	jwk.SetKid("123456")
+	jwk.SetAlg(jose.AlgRS512)
+	keys := map[string]jose.Jwk{"issuer": jwk}
+
 	// Act
 	store, err := NewTrustKeyStore(keys)
 

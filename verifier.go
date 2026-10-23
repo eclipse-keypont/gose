@@ -5,7 +5,6 @@ package gose
 
 import (
 	"crypto/x509"
-	"math"
 
 	"github.com/eclipse-keypont/gose/jose"
 )
@@ -50,8 +49,15 @@ func NewVerificationKey(jwk jose.Jwk) (VerificationKey, error) {
 		}
 		if jwk.Alg() == jose.AlgPS256 || jwk.Alg() == jose.AlgPS384 || jwk.Alg() == jose.AlgPS512 ||
 			jwk.Alg() == jose.AlgRS256 || jwk.Alg() == jose.AlgRS384 || jwk.Alg() == jose.AlgRS512 {
-			if v.E.Int().Int64() > math.MaxInt32 {
+			// Apply the same modulus and exponent bounds that LoadPublicKey enforces,
+			// so a key reaches verification only if it would also pass import. The old
+			// Int64() > MaxInt32 test let an exponent above 2^63 wrap through big.Int.Int64
+			// and left the modulus size unchecked.
+			if v.E.Int().BitLen() > 32 || v.E.Int().Sign() < 1 {
 				return nil, ErrInvalidExponent
+			}
+			if v.N.Int().BitLen() < MinRsaModulusBits {
+				return nil, ErrInvalidKeySize
 			}
 			var result RsaPublicKeyImpl
 			result.key.N = v.N.Int()
