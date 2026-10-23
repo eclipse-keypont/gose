@@ -74,10 +74,15 @@ func (store *TrustKeyStoreImpl) Get(_ context.Context, issuer, kid string) (vk V
 	}
 	if keySet, ok := store.keys[issuer]; ok {
 		if jwk, ok := keySet[kid]; ok {
-			if key, err := NewVerificationKey(jwk); err == nil {
-				return key, nil
+			// Return the error from NewVerificationKey itself. The previous
+			// `if key, err := ...; err == nil` scoped that err to the if, so the
+			// following return reported the (nil) named return instead, handing the
+			// caller (nil, nil) for a stored-but-unusable key.
+			key, kerr := NewVerificationKey(jwk)
+			if kerr != nil {
+				return nil, kerr
 			}
-			return nil, err
+			return key, nil
 		}
 	}
 	return nil, ErrUnknownKey
