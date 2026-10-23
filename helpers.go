@@ -671,7 +671,8 @@ func JwkFromSymmetric(key []byte, alg jose.Alg) (jwk *jose.OctSecretKey, err err
 func loadSymmetricBytes(jwk jose.Jwk, required []jose.KeyOps) (key []byte, err error) {
 	// TODO I made this private to discourage promiscuous use of
 	// raw key bytes, but if required it could easily be public.
-	if _, ok := symmetricAlgs[jwk.Alg()]; !ok {
+	sai, ok := symmetricAlgs[jwk.Alg()]
+	if !ok {
 		err = ErrInvalidKeyType
 		return
 	}
@@ -682,6 +683,12 @@ func loadSymmetricBytes(jwk jose.Jwk, required []jose.KeyOps) (key []byte, err e
 	switch v := jwk.(type) {
 	case *jose.OctSecretKey:
 		key = v.K.Bytes()
+		// Bind the key length to alg, as JwkFromSymmetric does, so a key cannot be used
+		// under an alg it does not fit: e.g. a 16-byte key labelled A256GCM would otherwise
+		// drive AES-128 while every artifact still advertised A256GCM.
+		if len(key) < sai.minLen || len(key) > sai.maxLen {
+			return nil, ErrInvalidKeyLength
+		}
 		return
 	default:
 		err = ErrUnsupportedKeyType
