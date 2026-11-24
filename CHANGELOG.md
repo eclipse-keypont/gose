@@ -3,15 +3,6 @@
 All notable changes to gose are documented in this file. For the full commit-level history see
 [GitHub Releases](https://github.com/eclipse-keypont/gose/releases).
 
-## Unreleased
-
-### Changed
-
-- Build and test toolchain bumped from `go1.27.2` to `go1.27.3` (`toolchain` directive in
-  `go.mod` and `.go-version`). go1.27.3 is a patch release that fixes the `crypto/x509`
-  standard-library vulnerability `GO-2026-6809` ("distrust compromised intermediate
-  certificates") flagged by `govulncheck` on go1.27.2.
-
 ## v1.0.0 — first stable release: pkcs11-go, crypto11/v2 and a hardened JOSE core
 
 gose has been on `v0.x` since its start, with no stability contract. v1.0.0 is its first stable
@@ -46,6 +37,33 @@ second major version onward).
 
 ### Fixed
 
+- **`NewVerificationKey` now bounds the RSA modulus and exponent.** It built a verification key
+  without the modulus floor and exponent bound that `LoadPublicKey` already enforces, and its
+  exponent check used `Int64() > MaxInt32`, which an exponent larger than 2^63 wraps through
+  `big.Int.Int64`. The same `BitLen`-based checks now apply, so a key reaches verification only
+  if it would also pass import.
+- **`TrustKeyStoreImpl.Get` returns the real error.** The lookup used
+  `if key, err := NewVerificationKey(jwk); err == nil`, which scoped `err` to the `if`, so the
+  following `return nil, err` reported the function's nil named return. `Get` answered
+  `(nil, nil)` for a stored key it could not turn into a verifier, and a caller that checks
+  `err` before using the key would dereference nil. The result is now assigned to a local and
+  its error returned.
+- **`loadSymmetricBytes` binds an oct key's length to its `alg`.** It accepted any length for a
+  known AEAD algorithm, so a 16-byte key labelled `A256GCM` drove AES-128 while every artifact
+  it produced still advertised `A256GCM`. The same `minLen`/`maxLen` bound `JwkFromSymmetric`
+  already enforces now applies, returning `ErrInvalidKeyLength` on a mismatch, so the loaded key
+  size always matches its `alg`.
+- **A JWE with a non-empty `crit` header is rejected.** Neither `JweRfc7516Compact.Unmarshal`
+  nor the legacy `Jwe.Unmarshal` checked the protected header's `crit` parameter, so a JWE
+  marking an extension critical was decrypted even though gose implements no JWE extensions.
+  RFC 7516 §4.1.13 requires rejecting such a token; a non-empty `crit` now returns
+  `ErrCritHeaderNotSupported`, matching `jwt.Verify`'s handling for JWS.
+- **A JWS signature segment must be canonical base64url.** `Jws.Unmarshal` decoded the signature
+  with a plain `RawURLEncoding.DecodeString`, which accepts non-zero trailing bits and skips
+  CR/LF, so two distinct token strings could carry the same signature bytes and both verify.
+  The header and payload are covered by the signature; only the signature segment was malleable.
+  It is now decoded strictly — re-encoding the result must reproduce the segment exactly,
+  otherwise `ErrJwtFormat` — so a verified token has one canonical serialisation.
 - **`NewRsaPublicKeyImpl` rejected every RSA key.** It asserted `LoadPublicKey`'s result to the
   value type `rsa.PublicKey`, but `LoadPublicKey` returns a `*rsa.PublicKey`, so the assertion
   always failed and the constructor returned `ErrInvalidKeyType` for any RSA JWK.
@@ -208,6 +226,10 @@ second major version onward).
 
 ### Changed
 
+- Build and test toolchain bumped from `go1.27.2` to `go1.27.3` (`toolchain` directive in
+  `go.mod` and `.go-version`). go1.27.3 is a patch release that fixes the `crypto/x509`
+  standard-library vulnerability `GO-2026-6809` ("distrust compromised intermediate
+  certificates") flagged by `govulncheck` on go1.27.2.
 - `JweDirectEncryptorBlock` documents that its IV is fixed for the instance's lifetime — the
   `cipher.BlockMode` it wraps carries its own chaining state — so one encryptor must be built per
   message with a fresh IV, as k8s-kms-plugin does. A per-operation IV needs a `BlockEncryptionKey`

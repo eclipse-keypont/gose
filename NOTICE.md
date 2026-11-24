@@ -4,9 +4,9 @@ This project uses the following third-party Go modules.
 
 | Package | License | License URL |
 |---------|---------|-------------|
-| `github.com/eclipse-keypont/crypto11/v2` | MIT | [Link](https://github.com/eclipse-keypont/crypto11/blob/v2.0.0-rc8/LICENSE) |
-| `github.com/eclipse-keypont/crypto11/v2/internal/pool` | Apache-2.0 | [Link](https://github.com/eclipse-keypont/crypto11/blob/v2.0.0-rc8/internal/pool/LICENSE) |
-| `github.com/eclipse-keypont/pkcs11-go` | MIT | [Link](https://github.com/eclipse-keypont/pkcs11-go/blob/v1.2.0-rc3/LICENSE) |
+| `github.com/eclipse-keypont/crypto11/v2` | MIT | [Link](https://github.com/eclipse-keypont/crypto11/blob/v2.0.0-rc10/LICENSE) |
+| `github.com/eclipse-keypont/crypto11/v2/internal/pool` | Apache-2.0 | [Link](https://github.com/eclipse-keypont/crypto11/blob/v2.0.0-rc10/internal/pool/LICENSE) |
+| `github.com/eclipse-keypont/pkcs11-go` | MIT | [Link](https://github.com/eclipse-keypont/pkcs11-go/blob/v1.2.0/LICENSE) |
 | `github.com/google/uuid` | BSD-3-Clause | [Link](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 
 ## Test-only dependencies
