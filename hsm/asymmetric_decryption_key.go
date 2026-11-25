@@ -32,13 +32,26 @@ func (a *AsymmetricDecryptionKey) Kid() string {
 	return string(a.kid)
 }
 
-// Certificates associated x509 certificates.
+// Certificates returns the certificate stored on the token under this key's CKA_ID /
+// CKA_LABEL, provided it certifies this key: its public key must equal the key's.
+//
+// A certificate object is tied to the key only by sharing its CKA_ID or CKA_LABEL, and
+// certificates are public objects, which a session that is not logged in can create on
+// many tokens. Without the check, such a certificate would be returned for the key and
+// published in the x5c of the JWK that Encryptor builds.
 func (a *AsymmetricDecryptionKey) Certificates() []*x509.Certificate {
-	// TODO: lookup certificates
 	cert, err := a.ctx.FindCertificate(a.kid, a.keylabel, nil)
 	if err != nil {
 		// TODO: return an error via an interface signature change in next major version.
 		slog.Error("failed to find certificate for HSM key", "kid", string(a.kid), "err", err)
+		return nil
+	}
+	if cert == nil {
+		return nil
+	}
+	pub, ok := a.key.Public().(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !pub.Equal(cert.PublicKey) {
+		slog.Error("certificate found for HSM key does not certify it; ignoring it", "kid", string(a.kid))
 		return nil
 	}
 	return []*x509.Certificate{cert}

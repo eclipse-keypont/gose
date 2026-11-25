@@ -5,11 +5,17 @@ package hsm
 
 import (
 	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -299,4 +305,71 @@ func TestAsymmetricDecryptionKeyStore_LabelTrimsPadding(t *testing.T) {
 	recovered, err := decKey.Decrypt(jose.KeyOpsDecrypt, crypto.SHA256, ciphertext)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
+}
+
+// issueCertificate returns a certificate for pub, signed by a throwaway CA.
+func issueCertificate(t *testing.T, pub crypto.PublicKey, serial int64) *x509.Certificate {
+	t.Helper()
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: fmt.Sprintf("gose-hsm-test-%d", serial)},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, caKey)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// TestAsymmetricDecryptionKey_CertificatesMustCertifyTheKey asserts that Certificates
+// returns the certificate stored under the key's CKA_ID only when it certifies the key,
+// and that Encryptor then carries it, or nothing, in x5c.
+func TestAsymmetricDecryptionKey_CertificatesMustCertifyTheKey(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	kid := []byte("gose-hsm-cert-kid")
+	label := []byte("gose-hsm-cert-label")
+	keyPair, err := testCtx.GenerateRSAKeyPairWithLabel(kid, label, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = keyPair.Delete() })
+
+	decKey, err := NewAsymmetricDecryptionKey(testCtx, keyPair, kid, nil)
+	require.NoError(t, err)
+
+	t.Run("no certificate", func(t *testing.T) {
+		assert.Empty(t, decKey.Certificates())
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		assert.NotNil(t, encKey)
+	})
+
+	t.Run("certificate for another key", func(t *testing.T) {
+		other, err := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, err)
+		require.NoError(t, testCtx.ImportCertificate(kid, issueCertificate(t, &other.PublicKey, 1)))
+		t.Cleanup(func() { _ = testCtx.DeleteCertificate(kid, nil, nil) })
+
+		assert.Empty(t, decKey.Certificates(), "a certificate for another key is not returned")
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		assert.Empty(t, encKey.Certificates(), "and does not reach the JWK")
+	})
+
+	t.Run("certificate for this key", func(t *testing.T) {
+		require.NoError(t, testCtx.DeleteCertificate(kid, nil, nil))
+		cert := issueCertificate(t, keyPair.Public(), 2)
+		require.NoError(t, testCtx.ImportCertificate(kid, cert))
+		t.Cleanup(func() { _ = testCtx.DeleteCertificate(kid, nil, nil) })
+
+		got := decKey.Certificates()
+		require.Len(t, got, 1)
+		assert.True(t, cert.Equal(got[0]))
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		require.Len(t, encKey.Certificates(), 1)
+	})
 }
