@@ -34,6 +34,15 @@ second major version onward).
   `httpClient` interface moved from `Get(url)` to `Do(req *http.Request)`.
 - Logging no longer goes through `logrus`; internal panics on malformed input were converted to
   returned errors, and remaining logging uses the standard `log/slog`.
+- **`hsm.NewAsymmetricDecryptionKeyStore` takes the key IDs it may resolve**
+  (`NewAsymmetricDecryptionKeyStore(ctx)` → `NewAsymmetricDecryptionKeyStore(ctx, kids ...string)`).
+  The store passed the JWE header's `kid`, which the sender chooses, straight to
+  `crypto11.FindKeyPair`. A JWE addressed to any RSA key pair on the token was therefore
+  decrypted, including another application's key or a signing key (crypto11 generates RSA pairs
+  with `CKA_DECRYPT` set). The lookup error also told the sender whether a key ID existed. `Get`
+  now answers only for the listed key IDs, and returns `gose.ErrUnknownKey` for any other without
+  touching the token. The existing call still compiles but lists no key IDs, so it resolves
+  nothing: pass the CKA_IDs this service decrypts with.
 
 ### Fixed
 
@@ -214,6 +223,36 @@ second major version onward).
   `ErrSealFailed`, wrapping the panic value when it is an error. It also returns `ErrSealFailed`
   when the AEAD output is not exactly ciphertext, tag and, for a nil nonce, the supplied nonce, rather
   than splitting a malformed buffer into the returned ciphertext and tag.
+- **A cancelled lookup no longer aborts the shared `JwksTrustStore` refresh.** The fetch that
+  every concurrent lookup waits on ran under the context of whichever lookup triggered it, and
+  counted as an attempt before the request was sent. A caller whose context was already
+  cancelled (a client that hung up, with a request-scoped context passed to `Get`) therefore
+  failed the fetch at once and started the 30 s cool-down. A key rotated in upstream stayed
+  unknown for that time, and once the cached set was older than the refresh interval, every
+  lookup failed with `ErrJwksStale` while the endpoint was healthy; repeating it kept JWT
+  verification down. The fetch now runs on a context detached from the caller's cancellation
+  (the HTTP client's timeout bounds it). Each lookup waits for it only as long as its own
+  context allows, and a lookup arriving while a fetch is in progress waits for that fetch
+  instead of being answered from the set it is about to replace.
+- **`JwtVerifierImpl.Verify` authenticates a token before evaluating its claims.** It checked
+  `nbf`, `exp` and `aud` first. For `aud` it compared every expected audience with every audience
+  in the token, collecting the token's audiences once per expected one, and formatted the lot
+  into the error. An unsigned token just under `MaxCompactSize` holding a large `aud` array cost
+  about 160 MB of allocation and 0.4 s per call with five expected audiences, and grew with each
+  one added, before any key was consulted. `Verify` now looks up the key and checks the
+  signature first, then the time window, then the audience against a set. A mismatch returns
+  `ErrNoExpectedAudience`, which no longer echoes the token's or the expected audiences.
+  `jose.Audiences` reads an `aud` array member by member and rejects one over the new
+  `jose.MaxAudiences` (256) with `jose.ErrInputTooLarge`, so such a token now costs about
+  1.5 MB and 17 ms. A token that is both badly signed and expired or for another audience now
+  reports `ErrInvalidSignature`.
+- **`hsm.AsymmetricDecryptionKey.Certificates` returns a certificate only if it certifies the
+  key.** A certificate object is tied to a key only by sharing its `CKA_ID` or `CKA_LABEL`, and
+  certificates are public objects that a session need not be logged in to create on many tokens.
+  `Certificates` returned whatever `FindCertificate` found, and `Encryptor` published it in the
+  `x5c` of the JWK it built, so a certificate for another key was served under this key. The
+  certificate's public key is now compared with the key's; a mismatch, or a missing certificate,
+  yields no certificate.
 
 ### Added
 

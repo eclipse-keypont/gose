@@ -5,7 +5,6 @@ package gose
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/eclipse-keypont/gose/jose"
@@ -30,8 +29,38 @@ func (verifier *JwtVerifierImpl) Verify(jwt string, audience []string) (kid stri
 	if signed, err = token.Unmarshal(jwt); err != nil {
 		return
 	}
+
+	// Authenticate the token before evaluating its claims: until the signature verifies,
+	// the claims are attacker-supplied, and checking them first spends work on (and echoes)
+	// whatever an unsigned token carries. The issuer is the one claim needed beforehand, to
+	// select the trust store entry.
+
+	// Though optional in the JWT spec we always require a Key ID to be present
+	// to resist various known attacks.
+	if len(token.Header.Kid) == 0 {
+		err = ErrInvalidKid
+		return
+	}
+	var key VerificationKey
+	key, err = verifier.store.Get(context.Background(), token.Claims.Issuer, token.Header.Kid)
+	if key == nil {
+		err = ErrUnknownKey
+		return
+	}
+	if err != nil {
+		return
+	}
+	// Ensure algorithms match!
+	if key.Algorithm() != token.Header.Alg {
+		err = ErrInvalidAlgorithm
+		return
+	}
+	if !key.Verify(jose.KeyOpsVerify, []byte(signed), token.Signature) {
+		err = ErrInvalidSignature
+		return
+	}
+
 	now := verifier.now().Unix()
-	seen := []string{}
 	if token.Claims.NotBefore > now {
 		err = ErrInvalidJwtTimeframe
 		return
@@ -40,54 +69,30 @@ func (verifier *JwtVerifierImpl) Verify(jwt string, audience []string) (kid stri
 		err = ErrInvalidJwtTimeframe
 		return
 	}
-	if len(token.Claims.Audiences.Aud) == 0 || len(audience) == 0 {
-		err = &InvalidFormat{fmt.Sprintf("no expected audience | expected %s | seen %s", audience, seen)}
+	if !hasExpectedAudience(token.Claims.Audiences.Aud, audience) {
+		// The error names neither the token's audiences nor the expected ones: the first
+		// would echo token content into logs, the second describes the service.
+		err = ErrNoExpectedAudience
 		return
 	}
 
-	// For debugging you may want to see the details of the expected and observed audiences
-	// Check at least 1 audience exists
-	found := false
-	for _, candidate := range audience {
-		for _, aud := range token.Claims.Audiences.Aud {
-			seen = append(seen, aud)
-			found = found || candidate == aud
-		}
-	}
-	if !found {
-		err = &InvalidFormat{fmt.Sprintf("no expected audience | expected %s | seen %s", audience, seen)}
-		return
-	}
-
-	// Though optional in the JWT spec we always require a Key ID to be present
-	// to resist various known attacks.
-	if len(token.Header.Kid) == 0 {
-		err = ErrInvalidKid
-		return
-	}
-	if len(token.Header.Kid) > 0 {
-		var key VerificationKey
-		key, err = verifier.store.Get(context.Background(), token.Claims.Issuer, token.Header.Kid)
-		if key == nil {
-			err = ErrUnknownKey
-			return
-		}
-
-		// Ensure algorithms match!
-		if key.Algorithm() != token.Header.Alg {
-			err = ErrInvalidAlgorithm
-			return
-		}
-
-		if !key.Verify(jose.KeyOpsVerify, []byte(signed), token.Signature) {
-			err = ErrInvalidSignature
-			return
-		}
-		kid = key.Kid()
-	}
-
+	kid = key.Kid()
 	claims = &token.Claims
 	return
+}
+
+// hasExpectedAudience reports whether any of the token's audiences is one of the expected ones.
+func hasExpectedAudience(tokenAudiences, expected []string) bool {
+	want := make(map[string]struct{}, len(expected))
+	for _, aud := range expected {
+		want[aud] = struct{}{}
+	}
+	for _, aud := range tokenAudiences {
+		if _, ok := want[aud]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // NewJwtVerifier creates a JWT Verifier for a given truststore

@@ -163,6 +163,11 @@ const (
 	// certificate) after decoding. A 16384-bit RSA modulus is 2 KiB, so 64 KiB is
 	// generous while still stopping an oversized big.Int from being materialised.
 	MaxBlobSize = 1 << 16 // 64 KiB
+	// MaxAudiences bounds the members of an "aud" claim array. RFC 7519 §4.1.3 allows an
+	// array, but a token names a handful of audiences; the bound stops an array of
+	// hundreds of thousands of one-character strings, which fits in MaxCompactSize, from
+	// costing an allocation per member before the token is authenticated.
+	MaxAudiences = 256
 )
 
 var (
