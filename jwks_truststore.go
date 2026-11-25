@@ -53,6 +53,11 @@ type httpClient interface {
 // fetch shares it with concurrent lookups, is rate-limited by the minimum refresh
 // interval, and the whole set is re-fetched once it is older than the refresh interval
 // so that upstream removals take effect.
+//
+// The fetch is shared, so it does not run under any one caller's context: a caller that
+// gives up (a cancelled request context, a client that hung up) stops waiting for it, but
+// the fetch carries on for everyone else and counts as an attempt only once it has
+// completed or failed on its own.
 type JwksTrustStore struct {
 	// mu guards the cached state below it. It is never held across the network.
 	mu           sync.Mutex
@@ -62,10 +67,9 @@ type JwksTrustStore struct {
 	keys         []VerificationKey
 	fetchedAt    time.Time // last successful fetch; zero before the first
 	lastAttempt  time.Time // last fetch attempt, successful or not; zero before the first
-
-	// fetchMu serialises fetches so that concurrent lookups needing one make a single
-	// request and the rest re-check the cache once it lands.
-	fetchMu sync.Mutex
+	// inflight is the fetch in progress, if any. Lookups that need a fetch while one is
+	// running wait for it rather than starting another.
+	inflight *jwksFetch
 
 	client             httpClient
 	now                func() time.Time
@@ -98,7 +102,16 @@ func (store *JwksTrustStore) Remove(_, _ string) bool {
 	return false
 }
 
+// jwksFetch is one fetch of the key set, shared by every lookup that needs it.
+type jwksFetch struct {
+	done chan struct{} // closed when the fetch has finished
+	err  error         // the fetch's result, valid once done is closed
+}
+
 // Get returns a verification key for the given issuer and key id. If no key is found nil is returned.
+//
+// ctx bounds how long this call waits for a fetch, not the fetch itself: if ctx ends first,
+// Get returns ctx.Err() and the fetch completes for the lookups that follow.
 func (store *JwksTrustStore) Get(ctx context.Context, issuer, kid string) (vk VerificationKey, err error) {
 	if !store.knownIssuer(issuer) {
 		return nil, nil
@@ -106,19 +119,39 @@ func (store *JwksTrustStore) Get(ctx context.Context, issuer, kid string) (vk Ve
 	if key, done, err := store.lookup(kid); done {
 		return key, err
 	}
-	// The cache cannot answer: fetch. Serialise fetches, and re-check under the fetch
-	// lock, because another goroutine may have refreshed the set while we waited for it.
-	store.fetchMu.Lock()
-	defer store.fetchMu.Unlock()
-	if key, done, err := store.lookup(kid); done {
-		return key, err
-	}
-	if err = store.refresh(ctx); err != nil {
+	// The cache cannot answer: join the fetch in progress, or start one.
+	if err = store.fetch(ctx); err != nil {
 		return nil, err
 	}
 	// Freshly fetched: the cache now answers one way or the other.
 	key, _, err := store.lookup(kid)
 	return key, err
+}
+
+// fetch waits for the shared fetch, starting it if none is in progress. The fetch runs on
+// a context detached from ctx's cancellation, so that no single caller can abort it; the
+// HTTP client's timeout bounds it instead.
+func (store *JwksTrustStore) fetch(ctx context.Context) error {
+	store.mu.Lock()
+	f := store.inflight
+	if f == nil {
+		f = &jwksFetch{done: make(chan struct{})}
+		store.inflight = f
+		go func() {
+			f.err = store.refresh(context.WithoutCancel(ctx))
+			store.mu.Lock()
+			store.inflight = nil
+			store.mu.Unlock()
+			close(f.done)
+		}()
+	}
+	store.mu.Unlock()
+	select {
+	case <-f.done:
+		return f.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // knownIssuer reports whether issuer is one this store vouches for.
@@ -145,7 +178,9 @@ func (store *JwksTrustStore) knownIssuer(issuer string) bool {
 //     minRefreshInterval, in which case the stale key is withheld with ErrJwksStale;
 //   - a miss triggers a fetch, unless one was attempted within minRefreshInterval, in
 //     which case the answer is simply "unknown" — this is what stops a stream of
-//     made-up kids turning into a stream of requests.
+//     made-up kids turning into a stream of requests;
+//   - while a fetch is in progress, anything but a fresh hit waits for it (done=false)
+//     rather than being answered from the set it is about to replace.
 func (store *JwksTrustStore) lookup(kid string) (key VerificationKey, done bool, err error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -162,6 +197,8 @@ func (store *JwksTrustStore) lookup(kid string) (key VerificationKey, done bool,
 	switch {
 	case key != nil && fresh:
 		return key, true, nil
+	case store.inflight != nil:
+		return nil, false, nil
 	case key != nil && coolingDown:
 		return nil, true, ErrJwksStale
 	case key == nil && coolingDown:
@@ -173,7 +210,7 @@ func (store *JwksTrustStore) lookup(kid string) (key VerificationKey, done bool,
 
 // refresh fetches the key set and replaces the cache with it. The store's mutex is not
 // held across the request, so lookups the cache can answer are never blocked by a slow
-// or unreachable endpoint. Caller holds fetchMu.
+// or unreachable endpoint. Only fetch calls it, at most one at a time.
 func (store *JwksTrustStore) refresh(ctx context.Context) (err error) {
 	store.mu.Lock()
 	store.lastAttempt = store.now()
