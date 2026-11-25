@@ -371,3 +371,76 @@ func TestJwksTrustStore_CacheHitsAreNotBlockedByAFetch(t *testing.T) {
 	close(slow.release)
 	<-fetchDone
 }
+
+// contextAwareClient fails a request whose context is already done, as http.Client does,
+// before handing it to the wrapped client.
+type contextAwareClient struct{ httpClient }
+
+func (c contextAwareClient) Do(req *http.Request) (*http.Response, error) {
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
+	return c.httpClient.Do(req)
+}
+
+// TestJwksTrustStore_CancelledCallerDoesNotAbortSharedFetch: a lookup whose context is
+// already cancelled may trigger the shared fetch, but cannot abort it or use up the
+// refresh window. Before, the fetch ran under that context, failed at once, and still
+// counted as an attempt, so a key rotated in upstream stayed unknown for the cool-down,
+// and a stale set was withheld from every caller.
+func TestJwksTrustStore_CancelledCallerDoesNotAbortSharedFetch(t *testing.T) {
+	client := &httpClientMock{}
+	client.On("Do", testJwksURL).Return(jwksResponse(jwksOneKey), nil).Once()
+	store := NewJwksKeyStore(testJwksIssuer, testJwksURL)
+	store.client = contextAwareClient{client}
+	clock := newFakeClock()
+	store.now = clock.Now
+	key, err := store.Get(context.Background(), testJwksIssuer, testKidA)
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Key rotation: the issuer now also publishes kid B.
+	client.On("Do", testJwksURL).Return(jwksResponse(jwks), nil).Once()
+	clock.Advance(DefaultJwksMinRefreshInterval + time.Second)
+	_, _ = store.Get(cancelled, testJwksIssuer, "made-up-kid")
+	key, err = store.Get(context.Background(), testJwksIssuer, testKidB)
+	require.NoError(t, err)
+	require.NotNil(t, key, "the rotated-in key must be served after a cancelled caller triggered the fetch")
+
+	// Staleness: once the set has aged past the refresh interval, a cancelled caller
+	// must not leave every lookup failing with ErrJwksStale.
+	client.On("Do", testJwksURL).Return(jwksResponse(jwks), nil).Once()
+	clock.Advance(DefaultJwksRefreshInterval + time.Second)
+	_, _ = store.Get(cancelled, testJwksIssuer, testKidA)
+	key, err = store.Get(context.Background(), testJwksIssuer, testKidA)
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	client.AssertNumberOfCalls(t, "Do", 3)
+}
+
+// TestJwksTrustStore_WaiterHonoursItsContext: a lookup waiting on a slow fetch returns
+// when its own context ends, while the fetch carries on and serves the next lookup.
+func TestJwksTrustStore_WaiterHonoursItsContext(t *testing.T) {
+	slow := &blockingClient{entered: make(chan struct{}), release: make(chan struct{}), body: jwks}
+	store := NewJwksKeyStore(testJwksIssuer, testJwksURL)
+	store.client = slow
+	clock := newFakeClock()
+	store.now = clock.Now
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := store.Get(ctx, testJwksIssuer, testKidA)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 2*time.Second)
+	<-slow.entered
+
+	close(slow.release)
+	key, err := store.Get(context.Background(), testJwksIssuer, testKidA)
+	require.NoError(t, err)
+	require.NotNil(t, key)
+}

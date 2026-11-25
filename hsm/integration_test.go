@@ -5,11 +5,17 @@ package hsm
 
 import (
 	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +23,7 @@ import (
 	"github.com/eclipse-keypont/crypto11/v2"
 	pkcs11 "github.com/eclipse-keypont/pkcs11-go/cryptoki"
 
+	"github.com/eclipse-keypont/gose"
 	"github.com/eclipse-keypont/gose/jose"
 )
 
@@ -209,7 +216,7 @@ func TestAsymmetricDecryptionKeyStore_RSAOAEPRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = keyPair.Delete() })
 
-	store := NewAsymmetricDecryptionKeyStore(testCtx)
+	store := NewAsymmetricDecryptionKeyStore(testCtx, string(kid))
 
 	decKey, err := store.Get(string(kid))
 	require.NoError(t, err)
@@ -237,10 +244,59 @@ func TestAsymmetricDecryptionKeyStore_RSAOAEPRoundTrip(t *testing.T) {
 func TestAsymmetricDecryptionKeyStore_UnknownKid(t *testing.T) {
 	skipIfNoLibrary(t)
 
-	store := NewAsymmetricDecryptionKeyStore(testCtx)
+	store := NewAsymmetricDecryptionKeyStore(testCtx, "gose-hsm-does-not-exist")
 
 	_, err := store.Get("gose-hsm-does-not-exist")
 	require.Error(t, err)
+}
+
+// TestAsymmetricDecryptionKeyStore_OnlyListedKids asserts that the store resolves only
+// the key IDs it was constructed with, whatever else is on the token: a JWE whose kid
+// names another key pair there is not decrypted, and the error does not say whether
+// that key exists.
+func TestAsymmetricDecryptionKeyStore_OnlyListedKids(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	ownKid := []byte("gose-hsm-allow-own")
+	otherKid := []byte("gose-hsm-allow-other")
+	own, err := testCtx.GenerateRSAKeyPair(ownKid, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = own.Delete() })
+	other, err := testCtx.GenerateRSAKeyPair(otherKid, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Delete() })
+
+	store := NewAsymmetricDecryptionKeyStore(testCtx, string(ownKid))
+
+	_, err = store.Get(string(otherKid))
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "a key pair on the token that the store was not given")
+	_, err = store.Get("gose-hsm-allow-absent")
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "an absent key pair must fail the same way")
+	_, err = NewAsymmetricDecryptionKeyStore(testCtx).Get(string(ownKid))
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "a store given no key IDs resolves none")
+
+	// End to end: a JWE encrypted to the other key pair is refused.
+	otherJwk, err := gose.JwkFromPublicKey(other.Public(), []jose.KeyOps{jose.KeyOpsEncrypt}, nil)
+	require.NoError(t, err)
+	otherJwk.SetKid(string(otherKid))
+	otherJwk.SetAlg(jose.AlgRSAOAEP)
+	encryptor, err := gose.NewJweRsaKeyEncryptionEncryptorImpl(otherJwk, rand.Reader)
+	require.NoError(t, err)
+	jwe, err := encryptor.Encrypt([]byte("meant for the other key"), crypto.SHA256)
+	require.NoError(t, err)
+	_, _, err = gose.NewJweRsaKeyEncryptionDecryptorImpl(store).Decrypt(jwe, crypto.SHA256)
+	require.Error(t, err)
+
+	// The listed key still works.
+	decKey, err := store.Get(string(ownKid))
+	require.NoError(t, err)
+	encKey, err := decKey.Encryptor()
+	require.NoError(t, err)
+	ciphertext, err := encKey.Encrypt(jose.KeyOpsEncrypt, crypto.SHA256, []byte("for the listed key"))
+	require.NoError(t, err)
+	recovered, err := decKey.Decrypt(jose.KeyOpsDecrypt, crypto.SHA256, ciphertext)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("for the listed key"), recovered)
 }
 
 // TestAsymmetricDecryptionKeyStore_LabelLookup exercises the label-based
@@ -299,4 +355,71 @@ func TestAsymmetricDecryptionKeyStore_LabelTrimsPadding(t *testing.T) {
 	recovered, err := decKey.Decrypt(jose.KeyOpsDecrypt, crypto.SHA256, ciphertext)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
+}
+
+// issueCertificate returns a certificate for pub, signed by a throwaway CA.
+func issueCertificate(t *testing.T, pub crypto.PublicKey, serial int64) *x509.Certificate {
+	t.Helper()
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: fmt.Sprintf("gose-hsm-test-%d", serial)},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, caKey)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// TestAsymmetricDecryptionKey_CertificatesMustCertifyTheKey asserts that Certificates
+// returns the certificate stored under the key's CKA_ID only when it certifies the key,
+// and that Encryptor then carries it, or nothing, in x5c.
+func TestAsymmetricDecryptionKey_CertificatesMustCertifyTheKey(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	kid := []byte("gose-hsm-cert-kid")
+	label := []byte("gose-hsm-cert-label")
+	keyPair, err := testCtx.GenerateRSAKeyPairWithLabel(kid, label, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = keyPair.Delete() })
+
+	decKey, err := NewAsymmetricDecryptionKey(testCtx, keyPair, kid, nil)
+	require.NoError(t, err)
+
+	t.Run("no certificate", func(t *testing.T) {
+		assert.Empty(t, decKey.Certificates())
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		assert.NotNil(t, encKey)
+	})
+
+	t.Run("certificate for another key", func(t *testing.T) {
+		other, err := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, err)
+		require.NoError(t, testCtx.ImportCertificate(kid, issueCertificate(t, &other.PublicKey, 1)))
+		t.Cleanup(func() { _ = testCtx.DeleteCertificate(kid, nil, nil) })
+
+		assert.Empty(t, decKey.Certificates(), "a certificate for another key is not returned")
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		assert.Empty(t, encKey.Certificates(), "and does not reach the JWK")
+	})
+
+	t.Run("certificate for this key", func(t *testing.T) {
+		require.NoError(t, testCtx.DeleteCertificate(kid, nil, nil))
+		cert := issueCertificate(t, keyPair.Public(), 2)
+		require.NoError(t, testCtx.ImportCertificate(kid, cert))
+		t.Cleanup(func() { _ = testCtx.DeleteCertificate(kid, nil, nil) })
+
+		got := decKey.Certificates()
+		require.Len(t, got, 1)
+		assert.True(t, cert.Equal(got[0]))
+		encKey, err := decKey.Encryptor()
+		require.NoError(t, err)
+		require.Len(t, encKey.Certificates(), 1)
+	})
 }

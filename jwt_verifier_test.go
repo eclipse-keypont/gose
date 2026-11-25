@@ -7,7 +7,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/base64"
-	"fmt"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -213,20 +213,32 @@ func TestJwtVerifierImpl_Verify_FailsWithExpViolation(t *testing.T) {
 }
 
 func TestJwtVerifierImpl_Verify_FailsWithNoKnownAudience(t *testing.T) {
-	testcases := []struct {
-		audiences []string
-		seen      []string
-	}{
-		{
-			audiences: []string{"unknown"},
-			seen:      []string{"test"},
-		},
-		{
-			audiences: []string{},
-			seen:      []string{},
-		},
+	// Setup: a correctly signed token for audience "test".
+	key := MockedVerificationKey{}
+	signatureBytes, err := base64.RawURLEncoding.DecodeString(rsaValidJwtSignature)
+	require.NoError(t, err)
+	key.On("Verify", jose.KeyOpsVerify, []byte(rsaValidJwtPayload), signatureBytes).Return(true)
+	key.On("Algorithm").Return(rsaValidJwtAlg)
+	ks := MockedTrustKeyStore{}
+	ks.On("Get", mock.Anything, validJwtKid).Return(&key, nil)
+	verifier := NewJwtVerifier(&ks)
+	verifier.now = atUnix(validJwtNbf)
+
+	for _, audiences := range [][]string{{"unknown"}, {}, nil} {
+		// Act
+		kid, claimSet, err := verifier.Verify(rsaValidJwt, audiences)
+
+		// Assert: a sentinel that echoes neither the token's audiences nor the expected ones.
+		require.ErrorIs(t, err, ErrNoExpectedAudience)
+		assert.NotContains(t, err.Error(), validJwtAud)
+		assert.Empty(t, kid)
+		assert.Nil(t, claimSet)
 	}
-	// Setup
+}
+
+func TestJwtVerifierImpl_Verify_ChecksSignatureBeforeClaims(t *testing.T) {
+	// An expired token for an unexpected audience with a bad signature: the signature is
+	// what fails, because claims are only evaluated once the token is authenticated.
 	key := MockedVerificationKey{}
 	signatureBytes, err := base64.RawURLEncoding.DecodeString(rsaValidJwtSignature)
 	require.NoError(t, err)
@@ -235,14 +247,31 @@ func TestJwtVerifierImpl_Verify_FailsWithNoKnownAudience(t *testing.T) {
 	ks := MockedTrustKeyStore{}
 	ks.On("Get", mock.Anything, validJwtKid).Return(&key, nil)
 	verifier := NewJwtVerifier(&ks)
+	verifier.now = atUnix(validJwtExp + 10)
+
+	_, claimSet, err := verifier.Verify(rsaValidJwt, []string{"unknown"})
+	require.Equal(t, ErrInvalidSignature, err)
+	require.Nil(t, claimSet)
+}
+
+func TestJwtVerifierImpl_Verify_RejectsOversizedAudienceBeforeKeyLookup(t *testing.T) {
+	// An unsigned token whose "aud" array exceeds jose.MaxAudiences is rejected while
+	// parsing, before the trust store or any key is consulted.
+	auds := make([]string, jose.MaxAudiences+1)
+	for i := range auds {
+		auds[i] = "a"
+	}
+	claims, err := json.Marshal(map[string]interface{}{"aud": auds, "exp": validJwtExp})
+	require.NoError(t, err)
+	enc := base64.RawURLEncoding.EncodeToString
+	token := enc([]byte(`{"alg":"PS256","typ":"JWT","kid":"12345"}`)) + "." + enc(claims) + "." + enc([]byte("sig"))
+
+	ks := MockedTrustKeyStore{} // no expectations: any Get call fails the test
+	verifier := NewJwtVerifier(&ks)
 	verifier.now = atUnix(validJwtNbf)
 
-	for _, test := range testcases {
-		// Act
-		_, _, err := verifier.Verify(rsaValidJwt, test.audiences)
-
-		// Assert
-		ee := &InvalidFormat{fmt.Sprintf("no expected audience | expected %s | seen %s", test.audiences, test.seen)}
-		assert.Equal(t, ee, err)
-	}
+	_, claimSet, err := verifier.Verify(token, []string{"a"})
+	require.ErrorIs(t, err, jose.ErrInputTooLarge)
+	require.Nil(t, claimSet)
+	ks.AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
 }

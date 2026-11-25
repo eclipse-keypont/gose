@@ -4,6 +4,7 @@
 package jose
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -30,28 +31,40 @@ type Audiences struct {
 	Aud []string
 }
 
-// UnmarshalJSON byte slice to audience members or error
-func (audiences *Audiences) UnmarshalJSON(src []byte) (err error) {
-	var toUnmarshal interface{}
-	if err = json.Unmarshal(src, &toUnmarshal); err != nil {
-		return
+// UnmarshalJSON byte slice to audience members or error. The claim is either a string or an
+// array of strings (RFC 7519 §4.1.3). An array is read member by member and rejected with
+// ErrInputTooLarge once it exceeds MaxAudiences, so an oversized one is not decoded in full.
+func (audiences *Audiences) UnmarshalJSON(src []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(src))
+	tok, err := dec.Token()
+	if err != nil {
+		return ErrJSONFormat
 	}
-	switch t := toUnmarshal.(type) {
+	switch t := tok.(type) {
 	case string:
 		audiences.Aud = append(audiences.Aud, t)
-	case []interface{}:
-		for _, item := range t {
-			str, ok := item.(string)
+		return nil
+	case json.Delim:
+		if t != '[' {
+			return ErrJSONFormat
+		}
+		for dec.More() {
+			if len(audiences.Aud) >= MaxAudiences {
+				return ErrInputTooLarge
+			}
+			if tok, err = dec.Token(); err != nil {
+				return ErrJSONFormat
+			}
+			str, ok := tok.(string)
 			if !ok {
-				err = ErrJSONFormat
-				return
+				return ErrJSONFormat
 			}
 			audiences.Aud = append(audiences.Aud, str)
 		}
+		return nil
 	default:
-		err = ErrJSONFormat
+		return ErrJSONFormat
 	}
-	return
 }
 
 // MarshalJSON audience to byte slice or error
