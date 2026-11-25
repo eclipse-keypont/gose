@@ -23,6 +23,7 @@ import (
 	"github.com/eclipse-keypont/crypto11/v2"
 	pkcs11 "github.com/eclipse-keypont/pkcs11-go/cryptoki"
 
+	"github.com/eclipse-keypont/gose"
 	"github.com/eclipse-keypont/gose/jose"
 )
 
@@ -215,7 +216,7 @@ func TestAsymmetricDecryptionKeyStore_RSAOAEPRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = keyPair.Delete() })
 
-	store := NewAsymmetricDecryptionKeyStore(testCtx)
+	store := NewAsymmetricDecryptionKeyStore(testCtx, string(kid))
 
 	decKey, err := store.Get(string(kid))
 	require.NoError(t, err)
@@ -243,10 +244,59 @@ func TestAsymmetricDecryptionKeyStore_RSAOAEPRoundTrip(t *testing.T) {
 func TestAsymmetricDecryptionKeyStore_UnknownKid(t *testing.T) {
 	skipIfNoLibrary(t)
 
-	store := NewAsymmetricDecryptionKeyStore(testCtx)
+	store := NewAsymmetricDecryptionKeyStore(testCtx, "gose-hsm-does-not-exist")
 
 	_, err := store.Get("gose-hsm-does-not-exist")
 	require.Error(t, err)
+}
+
+// TestAsymmetricDecryptionKeyStore_OnlyListedKids asserts that the store resolves only
+// the key IDs it was constructed with, whatever else is on the token: a JWE whose kid
+// names another key pair there is not decrypted, and the error does not say whether
+// that key exists.
+func TestAsymmetricDecryptionKeyStore_OnlyListedKids(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	ownKid := []byte("gose-hsm-allow-own")
+	otherKid := []byte("gose-hsm-allow-other")
+	own, err := testCtx.GenerateRSAKeyPair(ownKid, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = own.Delete() })
+	other, err := testCtx.GenerateRSAKeyPair(otherKid, 2048)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Delete() })
+
+	store := NewAsymmetricDecryptionKeyStore(testCtx, string(ownKid))
+
+	_, err = store.Get(string(otherKid))
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "a key pair on the token that the store was not given")
+	_, err = store.Get("gose-hsm-allow-absent")
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "an absent key pair must fail the same way")
+	_, err = NewAsymmetricDecryptionKeyStore(testCtx).Get(string(ownKid))
+	require.ErrorIs(t, err, gose.ErrUnknownKey, "a store given no key IDs resolves none")
+
+	// End to end: a JWE encrypted to the other key pair is refused.
+	otherJwk, err := gose.JwkFromPublicKey(other.Public(), []jose.KeyOps{jose.KeyOpsEncrypt}, nil)
+	require.NoError(t, err)
+	otherJwk.SetKid(string(otherKid))
+	otherJwk.SetAlg(jose.AlgRSAOAEP)
+	encryptor, err := gose.NewJweRsaKeyEncryptionEncryptorImpl(otherJwk, rand.Reader)
+	require.NoError(t, err)
+	jwe, err := encryptor.Encrypt([]byte("meant for the other key"), crypto.SHA256)
+	require.NoError(t, err)
+	_, _, err = gose.NewJweRsaKeyEncryptionDecryptorImpl(store).Decrypt(jwe, crypto.SHA256)
+	require.Error(t, err)
+
+	// The listed key still works.
+	decKey, err := store.Get(string(ownKid))
+	require.NoError(t, err)
+	encKey, err := decKey.Encryptor()
+	require.NoError(t, err)
+	ciphertext, err := encKey.Encrypt(jose.KeyOpsEncrypt, crypto.SHA256, []byte("for the listed key"))
+	require.NoError(t, err)
+	recovered, err := decKey.Decrypt(jose.KeyOpsDecrypt, crypto.SHA256, ciphertext)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("for the listed key"), recovered)
 }
 
 // TestAsymmetricDecryptionKeyStore_LabelLookup exercises the label-based
